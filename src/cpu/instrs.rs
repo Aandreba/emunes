@@ -332,6 +332,28 @@ impl<'a> Cpu<'a> {
             0xe8 => Instr::INX,
             // INY
             0xc8 => Instr::INY,
+            // JMP
+            0x4c => Instr::JMP(reader.next_u16()),
+            0x6c => Instr::JMPIndirect(reader.next_u16()),
+            // JSR
+            0x20 => Instr::JSR(reader.next_u16()),
+            // LDA
+            0xa9 => Instr::LDA(Operand::Immediate(reader.next_u8())),
+            0xa5 => Instr::LDA(Operand::Addressing(Addressing::ZeroPage(reader.next_u8()))),
+            0xb5 => Instr::LDA(Operand::Addressing(Addressing::ZeroPageX(reader.next_u8()))),
+            0xaD => Instr::LDA(Operand::Addressing(Addressing::Absolute(reader.next_u16()))),
+            0xbD => Instr::LDA(Operand::Addressing(Addressing::AbsoluteX(
+                reader.next_u16(),
+            ))),
+            0xb9 => Instr::LDA(Operand::Addressing(Addressing::AbsoluteY(
+                reader.next_u16(),
+            ))),
+            0xa1 => Instr::LDA(Operand::Addressing(Addressing::IndexedIndirect(
+                reader.next_u8(),
+            ))),
+            0xb1 => Instr::LDA(Operand::Addressing(Addressing::IndirectIndexed(
+                reader.next_u8(),
+            ))),
             _ => return None,
         });
     }
