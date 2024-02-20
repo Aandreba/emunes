@@ -24,7 +24,7 @@ pub enum Instr {
     AND(Operand),
     EOR(Operand),
     ORA(Operand),
-    BIT(Operand),
+    BIT(Addressing),
     ADC(Operand),
     SBC(Operand),
     CMP(Operand),
@@ -200,6 +200,11 @@ impl<'a> Cpu<'a> {
                 *self.1 += 2;
                 return res;
             }
+
+            pub fn next_relative(&mut self) -> u16 {
+                let delta = self.next_u8() as i8;
+                self.1 .0.wrapping_add_signed(delta as i16)
+            }
         }
 
         let mut reader = Reader(&self.memory, pc);
@@ -240,6 +245,91 @@ impl<'a> Cpu<'a> {
             0x31 => Instr::AND(Operand::Addressing(Addressing::IndirectIndexed(
                 reader.next_u8(),
             ))),
+            // ASL
+            0x0A => Instr::ASL(Operand::Accumulator),
+            0x06 => Instr::ASL(Operand::Addressing(Addressing::ZeroPage(reader.next_u8()))),
+            0x16 => Instr::ASL(Operand::Addressing(Addressing::ZeroPageX(reader.next_u8()))),
+            0x0E => Instr::ASL(Operand::Addressing(Addressing::Absolute(reader.next_u16()))),
+            0x1E => Instr::ASL(Operand::Addressing(Addressing::AbsoluteX(
+                reader.next_u16(),
+            ))),
+            // Branching
+            0x90 => Instr::BCC(reader.next_relative()),
+            0xB0 => Instr::BCS(reader.next_relative()),
+            0xF0 => Instr::BEQ(reader.next_relative()),
+            // BIT
+            0x24 => Instr::BIT(Addressing::ZeroPage(reader.next_u8())),
+            0x2c => Instr::BIT(Addressing::Absolute(reader.next_u16())),
+            // Branching
+            0x30 => Instr::BMI(reader.next_relative()),
+            0xd0 => Instr::BNE(reader.next_relative()),
+            0x10 => Instr::BPL(reader.next_relative()),
+            // BRK
+            0x00 => Instr::BRK,
+            // Branching
+            0x50 => Instr::BVC(reader.next_relative()),
+            0x70 => Instr::BVS(reader.next_relative()),
+            // Clear flags
+            0x18 => Instr::CLC,
+            0xd8 => Instr::CLD,
+            0x58 => Instr::CLI,
+            0xb8 => Instr::CLV,
+            // CMP
+            0xC9 => Instr::CMP(Operand::Immediate(reader.next_u8())),
+            0xC5 => Instr::CMP(Operand::Addressing(Addressing::ZeroPage(reader.next_u8()))),
+            0xD5 => Instr::CMP(Operand::Addressing(Addressing::ZeroPageX(reader.next_u8()))),
+            0xCD => Instr::CMP(Operand::Addressing(Addressing::Absolute(reader.next_u16()))),
+            0xDD => Instr::CMP(Operand::Addressing(Addressing::AbsoluteX(
+                reader.next_u16(),
+            ))),
+            0xD9 => Instr::CMP(Operand::Addressing(Addressing::AbsoluteY(
+                reader.next_u16(),
+            ))),
+            0xC1 => Instr::CMP(Operand::Addressing(Addressing::IndexedIndirect(
+                reader.next_u8(),
+            ))),
+            0xD1 => Instr::CMP(Operand::Addressing(Addressing::IndirectIndexed(
+                reader.next_u8(),
+            ))),
+            // CPX
+            0xE0 => Instr::CPX(Operand::Immediate(reader.next_u8())),
+            0xE4 => Instr::CPX(Operand::Addressing(Addressing::ZeroPage(reader.next_u8()))),
+            0xEc => Instr::CPX(Operand::Addressing(Addressing::Absolute(reader.next_u16()))),
+            // CPY
+            0xC0 => Instr::CPY(Operand::Immediate(reader.next_u8())),
+            0xC4 => Instr::CPY(Operand::Addressing(Addressing::ZeroPage(reader.next_u8()))),
+            0xCc => Instr::CPY(Operand::Addressing(Addressing::Absolute(reader.next_u16()))),
+            // DEC
+            0xc6 => Instr::DEC(Addressing::ZeroPage(reader.next_u8())),
+            0xd6 => Instr::DEC(Addressing::ZeroPageX(reader.next_u8())),
+            0xce => Instr::DEC(Addressing::Absolute(reader.next_u16())),
+            0xde => Instr::DEC(Addressing::AbsoluteX(reader.next_u16())),
+            // DEX
+            0xca => Instr::DEX,
+            // DEY
+            0x88 => Instr::DEY,
+            // EOR
+            0x49 => Instr::EOR(Operand::Immediate(reader.next_u8())),
+            0x45 => Instr::EOR(Operand::Addressing(Addressing::ZeroPage(reader.next_u8()))),
+            0x55 => Instr::EOR(Operand::Addressing(Addressing::ZeroPageX(reader.next_u8()))),
+            0x4D => Instr::EOR(Operand::Addressing(Addressing::Absolute(reader.next_u16()))),
+            0x5D => Instr::EOR(Operand::Addressing(Addressing::AbsoluteX(
+                reader.next_u16(),
+            ))),
+            0x59 => Instr::EOR(Operand::Addressing(Addressing::AbsoluteY(
+                reader.next_u16(),
+            ))),
+            0x41 => Instr::EOR(Operand::Addressing(Addressing::IndexedIndirect(
+                reader.next_u8(),
+            ))),
+            0x51 => Instr::EOR(Operand::Addressing(Addressing::IndirectIndexed(
+                reader.next_u8(),
+            ))),
+            // INC
+            0xe6 => Instr::INC(Addressing::ZeroPage(reader.next_u8())),
+            0xf6 => Instr::INC(Addressing::ZeroPageX(reader.next_u8())),
+            0xee => Instr::INC(Addressing::Absolute(reader.next_u16())),
+            0xfe => Instr::INC(Addressing::AbsoluteX(reader.next_u16())),
             _ => return None,
         });
     }

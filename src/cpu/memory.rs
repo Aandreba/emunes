@@ -10,6 +10,16 @@ pub struct Memory<'a> {
 }
 
 impl<'a> Memory<'a> {
+    #[inline(always)]
+    pub fn builder() -> Builder<'a> {
+        return Builder::new();
+    }
+
+    #[inline]
+    pub fn new() -> Self {
+        Self::builder().build()
+    }
+
     pub fn read_u8(&self, addr: u16) -> u8 {
         let (region, offset) = match self.regions.binary_search_by_key(&addr, |&(k, _)| k) {
             Ok(idx) => (&self.regions[idx].1, 0),
@@ -56,6 +66,18 @@ impl<'a> Memory<'a> {
         self.write_u8(addr, lo);
         self.write_u8(addr + 1, hi);
     }
+
+    pub fn copy_from(&mut self, offset: u16, src: &[u8]) {
+        for (addr, &val) in (offset..=0xffff).zip(src) {
+            self.write_u8(addr, val)
+        }
+    }
+
+    pub fn copy_to(&mut self, offset: u16, dst: &mut [u8]) {
+        for (addr, dst) in (offset..=0xffff).zip(dst) {
+            *dst = self.read_u8(addr)
+        }
+    }
 }
 
 pub struct Builder<'a> {
@@ -63,6 +85,13 @@ pub struct Builder<'a> {
 }
 
 impl<'a> Builder<'a> {
+    #[inline]
+    pub fn new() -> Self {
+        return Self {
+            regions: BinaryMap::new(),
+        };
+    }
+
     pub fn mirror(
         mut self,
         dst: impl RangeBounds<u16>,
@@ -160,6 +189,13 @@ impl<'a> Builder<'a> {
             }
         }
         return Ok(());
+    }
+}
+
+impl<'a> Default for Builder<'a> {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::new()
     }
 }
 

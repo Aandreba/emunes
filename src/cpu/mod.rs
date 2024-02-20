@@ -3,7 +3,7 @@ use self::{
     instrs::{page_crossed, Addressing, Instr, Operand},
     memory::Memory,
 };
-use std::num::Wrapping;
+use std::{fmt::Debug, num::Wrapping};
 
 pub mod flags;
 pub mod instrs;
@@ -19,21 +19,34 @@ pub struct Cpu<'a> {
 }
 
 impl<'a> Cpu<'a> {
-    pub fn restart(&mut self, tick: impl FnMut(u8)) {
+    pub fn new(memory: Memory<'a>) -> Self {
+        return Self {
+            accumulator: 0,
+            x: 0,
+            y: 0,
+            stack_ptr: 0xfe,
+            flags: Flags::default(),
+            memory,
+        };
+    }
+
+    pub fn restart(&mut self, tick: impl FnMut(&mut Self, u8)) {
         let pc = self.memory.read_u16(0xfffc);
         self.run(pc, tick)
     }
 
-    pub fn run(&mut self, pc: u16, mut tick: impl FnMut(u8)) {
+    pub fn run(&mut self, pc: u16, mut tick: impl FnMut(&mut Self, u8)) {
         let mut pc = Wrapping(pc);
         let mut prev_cycles = 0;
 
         loop {
-            tick(prev_cycles);
+            tick(self, prev_cycles);
             let instr = self
                 .read_instruction(&mut pc)
-                .expect(&format!("unknown instruction found at 0x{pc:04X}"));
+                .expect(&format!("unknown instruction found at 0x{:04X}", pc.0 - 1));
             prev_cycles = instr.cycles();
+
+            log::trace!("{instr:?}");
 
             match instr {
                 Instr::LDA(op) => {
@@ -42,7 +55,7 @@ impl<'a> Cpu<'a> {
                     self.flags.set_nz(self.accumulator);
 
                     if page_crossed {
-                        tick(1);
+                        tick(self, 1);
                     }
                 }
                 Instr::LDX(op) => {
@@ -51,7 +64,7 @@ impl<'a> Cpu<'a> {
                     self.flags.set_nz(self.x);
 
                     if page_crossed {
-                        tick(1);
+                        tick(self, 1);
                     }
                 }
                 Instr::LDY(op) => {
@@ -60,7 +73,7 @@ impl<'a> Cpu<'a> {
                     self.flags.set_nz(self.y);
 
                     if page_crossed {
-                        tick(1);
+                        tick(self, 1);
                     }
                 }
                 Instr::STA(addr) => {
@@ -186,5 +199,17 @@ impl<'a> Cpu<'a> {
                 (addr, page_crossed(base, addr))
             }
         }
+    }
+}
+
+impl Debug for Cpu<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cpu")
+            .field("accumulator", &self.accumulator)
+            .field("x", &self.x)
+            .field("y", &self.y)
+            .field("stack_ptr", &self.stack_ptr)
+            .field("flags", &self.flags)
+            .finish_non_exhaustive()
     }
 }
