@@ -1,7 +1,5 @@
-use crate::cpu::memory::Memory;
-
 use super::Cpu;
-use std::num::Wrapping;
+use crate::cpu::memory::Memory;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Instr {
@@ -185,25 +183,25 @@ impl Operand {
 
 impl<'a> Cpu<'a> {
     // http://www.6502.org/users/obelisk/6502/reference.html
-    pub fn read_instruction(&self, pc: &mut Wrapping<u16>) -> Option<Instr> {
-        struct Reader<'a, 'b>(&'a Memory<'b>, &'a mut Wrapping<u16>);
+    pub fn read_instruction(&self, pc: &mut u16) -> Option<Instr> {
+        struct Reader<'a, 'b>(&'a Memory<'b>, &'a mut u16);
 
         impl<'a, 'b> Reader<'a, 'b> {
             pub fn next_u8(&mut self) -> u8 {
-                let res = self.0.read_u8(self.1 .0);
-                *self.1 += 1;
+                let res = self.0.read_u8(*self.1);
+                *self.1 = self.1.wrapping_add(1);
                 return res;
             }
 
             pub fn next_u16(&mut self) -> u16 {
-                let res = self.0.read_u16(self.1 .0);
-                *self.1 += 2;
+                let res = self.0.read_u16(*self.1);
+                *self.1 = self.1.wrapping_add(2);
                 return res;
             }
 
             pub fn next_relative(&mut self) -> u16 {
                 let delta = self.next_u8() as i8;
-                self.1 .0.wrapping_add_signed(delta as i16)
+                self.1.wrapping_add_signed(delta as i16)
             }
         }
 
@@ -330,6 +328,10 @@ impl<'a> Cpu<'a> {
             0xf6 => Instr::INC(Addressing::ZeroPageX(reader.next_u8())),
             0xee => Instr::INC(Addressing::Absolute(reader.next_u16())),
             0xfe => Instr::INC(Addressing::AbsoluteX(reader.next_u16())),
+            // INX
+            0xe8 => Instr::INX,
+            // INY
+            0xc8 => Instr::INY,
             _ => return None,
         });
     }

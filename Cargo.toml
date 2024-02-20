@@ -7,6 +7,9 @@ edition = "2021"
 
 [dependencies]
 log = "0.4.20"
+pixels = "0.13.0"
 simple_logger = "4.3.3"
 thiserror = "1.0.57"
 vector_mapp = "0.3.3"
+wgpu = "0.19.1"
+winit = { version = "0.29.10", features = ["rwh_05"] }
