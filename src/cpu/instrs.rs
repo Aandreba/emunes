@@ -354,6 +354,118 @@ impl<'a> Cpu<'a> {
             0xb1 => Instr::LDA(Operand::Addressing(Addressing::IndirectIndexed(
                 reader.next_u8(),
             ))),
+            // LDX
+            0xa2 => Instr::LDX(Operand::Immediate(reader.next_u8())),
+            0xa6 => Instr::LDX(Operand::Addressing(Addressing::ZeroPage(reader.next_u8()))),
+            0xb6 => Instr::LDX(Operand::Addressing(Addressing::ZeroPageY(reader.next_u8()))),
+            0xae => Instr::LDX(Operand::Addressing(Addressing::Absolute(reader.next_u16()))),
+            0xbe => Instr::LDX(Operand::Addressing(Addressing::AbsoluteY(
+                reader.next_u16(),
+            ))),
+            // LDY
+            0xa0 => Instr::LDY(Operand::Immediate(reader.next_u8())),
+            0xa4 => Instr::LDY(Operand::Addressing(Addressing::ZeroPage(reader.next_u8()))),
+            0xb4 => Instr::LDY(Operand::Addressing(Addressing::ZeroPageX(reader.next_u8()))),
+            0xac => Instr::LDY(Operand::Addressing(Addressing::Absolute(reader.next_u16()))),
+            0xbc => Instr::LDY(Operand::Addressing(Addressing::AbsoluteX(
+                reader.next_u16(),
+            ))),
+            // LSR
+            0x4a => Instr::LSR(Operand::Accumulator),
+            0x46 => Instr::LSR(Operand::Addressing(Addressing::ZeroPage(reader.next_u8()))),
+            0x56 => Instr::LSR(Operand::Addressing(Addressing::ZeroPageX(reader.next_u8()))),
+            0x4e => Instr::LSR(Operand::Addressing(Addressing::Absolute(reader.next_u16()))),
+            0x5e => Instr::LSR(Operand::Addressing(Addressing::AbsoluteX(
+                reader.next_u16(),
+            ))),
+            // NOP
+            0xea => Instr::NOP,
+            // ORA
+            0x09 => Instr::ORA(Operand::Immediate(reader.next_u8())),
+            0x05 => Instr::ORA(Operand::Addressing(Addressing::ZeroPage(reader.next_u8()))),
+            0x15 => Instr::ORA(Operand::Addressing(Addressing::ZeroPageX(reader.next_u8()))),
+            0x0D => Instr::ORA(Operand::Addressing(Addressing::Absolute(reader.next_u16()))),
+            0x1D => Instr::ORA(Operand::Addressing(Addressing::AbsoluteX(
+                reader.next_u16(),
+            ))),
+            0x19 => Instr::ORA(Operand::Addressing(Addressing::AbsoluteY(
+                reader.next_u16(),
+            ))),
+            0x01 => Instr::ORA(Operand::Addressing(Addressing::IndexedIndirect(
+                reader.next_u8(),
+            ))),
+            0x11 => Instr::ORA(Operand::Addressing(Addressing::IndirectIndexed(
+                reader.next_u8(),
+            ))),
+            // Stack Push/Pull
+            0x48 => Instr::PHA,
+            0x08 => Instr::PHP,
+            0x68 => Instr::PLA,
+            0x28 => Instr::PLP,
+            // ROL
+            0x2A => Instr::ROL(Operand::Accumulator),
+            0x26 => Instr::ROL(Operand::Addressing(Addressing::ZeroPage(reader.next_u8()))),
+            0x36 => Instr::ROL(Operand::Addressing(Addressing::ZeroPageX(reader.next_u8()))),
+            0x2E => Instr::ROL(Operand::Addressing(Addressing::Absolute(reader.next_u16()))),
+            0x3E => Instr::ROL(Operand::Addressing(Addressing::AbsoluteX(
+                reader.next_u16(),
+            ))),
+            // ROR
+            0x6A => Instr::ROR(Operand::Accumulator),
+            0x66 => Instr::ROR(Operand::Addressing(Addressing::ZeroPage(reader.next_u8()))),
+            0x76 => Instr::ROR(Operand::Addressing(Addressing::ZeroPageX(reader.next_u8()))),
+            0x6E => Instr::ROR(Operand::Addressing(Addressing::Absolute(reader.next_u16()))),
+            0x7E => Instr::ROR(Operand::Addressing(Addressing::AbsoluteX(
+                reader.next_u16(),
+            ))),
+            // RTI
+            0x40 => Instr::RTI,
+            // RTS
+            0x60 => Instr::RTS,
+            // SBC
+            0xE9 => Instr::SBC(Operand::Immediate(reader.next_u8())),
+            0xE5 => Instr::SBC(Operand::Addressing(Addressing::ZeroPage(reader.next_u8()))),
+            0xF5 => Instr::SBC(Operand::Addressing(Addressing::ZeroPageX(reader.next_u8()))),
+            0xED => Instr::SBC(Operand::Addressing(Addressing::Absolute(reader.next_u16()))),
+            0xFD => Instr::SBC(Operand::Addressing(Addressing::AbsoluteX(
+                reader.next_u16(),
+            ))),
+            0xF9 => Instr::SBC(Operand::Addressing(Addressing::AbsoluteY(
+                reader.next_u16(),
+            ))),
+            0xE1 => Instr::SBC(Operand::Addressing(Addressing::IndexedIndirect(
+                reader.next_u8(),
+            ))),
+            0xF1 => Instr::SBC(Operand::Addressing(Addressing::IndirectIndexed(
+                reader.next_u8(),
+            ))),
+            // Set flags
+            0x38 => Instr::SEC,
+            0xf8 => Instr::SED,
+            0x78 => Instr::SEI,
+            // STA
+            0x85 => Instr::STA(Addressing::ZeroPage(reader.next_u8())),
+            0x95 => Instr::STA(Addressing::ZeroPageX(reader.next_u8())),
+            0x8D => Instr::STA(Addressing::Absolute(reader.next_u16())),
+            0x9D => Instr::STA(Addressing::AbsoluteX(reader.next_u16())),
+            0x99 => Instr::STA(Addressing::AbsoluteY(reader.next_u16())),
+            0x81 => Instr::STA(Addressing::IndexedIndirect(reader.next_u8())),
+            0x91 => Instr::STA(Addressing::IndirectIndexed(reader.next_u8())),
+            // STX
+            0x86 => Instr::STX(Addressing::ZeroPage(reader.next_u8())),
+            0x96 => Instr::STX(Addressing::ZeroPageY(reader.next_u8())),
+            0x8e => Instr::STX(Addressing::Absolute(reader.next_u16())),
+            // STY
+            0x84 => Instr::STY(Addressing::ZeroPage(reader.next_u8())),
+            0x94 => Instr::STY(Addressing::ZeroPageY(reader.next_u8())),
+            0x8c => Instr::STY(Addressing::Absolute(reader.next_u16())),
+            // Transfers
+            0xaa => Instr::TAX,
+            0xa8 => Instr::TAY,
+            0xba => Instr::TSX,
+            0x8a => Instr::TXA,
+            0x9a => Instr::TXS,
+            0x98 => Instr::TYA,
             _ => return None,
         });
     }
