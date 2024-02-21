@@ -32,18 +32,18 @@ impl Flags {
         return (self.0 >> flag as u8) & 1 == 1;
     }
 
+    // http://wiki.nesdev.com/w/index.php/CPU_status_flag_behavior
     pub fn into_u8(self, from_interrupt: bool) -> u8 {
         let mut bits = self.0 | (1 << 5);
         if !from_interrupt {
             bits |= 1 << 4
         }
-
         return bits;
     }
 
     #[inline(always)]
     pub fn from_u8(val: u8) -> Self {
-        return Self(val);
+        return Self((val & !(1 << 4)) | (1 << 5));
     }
 }
 

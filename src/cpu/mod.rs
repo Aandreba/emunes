@@ -367,8 +367,8 @@ impl<'a> Cpu<'a> {
                 Instr::SEI => self.flags.insert(Flag::InterruptDisable),
                 // https://github.com/bugzmanov/nes_ebook/blob/master/code/ch8/src/cpu.rs#L692
                 Instr::BRK => {
-                    pc = pc.wrapping_add(1);
                     if !self.flags.contains(Flag::InterruptDisable) {
+                        pc = pc.wrapping_add(1);
                         self.push_u16(pc);
                         self.push(self.flags.into_u8(false));
                         self.flags.insert(Flag::InterruptDisable);
