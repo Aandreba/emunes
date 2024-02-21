@@ -40,12 +40,15 @@ impl<'a> Cpu<'a> {
         let mut prev_cycles = 0;
 
         loop {
+            let prev_pc = pc;
             tick(self, prev_cycles);
+
             let instr = self
                 .read_instruction(&mut pc)
-                .expect(&format!("unknown instruction found at 0x{:04X}", pc - 1));
+                .expect(&format!("unknown instruction found at 0x{prev_pc:04X}"));
             prev_cycles = instr.cycles();
-            log::trace!("{instr:?}");
+
+            log::trace!("{prev_pc:04X}: {instr:04X?}");
 
             match instr {
                 Instr::LDA(op) => {
@@ -328,6 +331,11 @@ impl<'a> Cpu<'a> {
                 }
                 Instr::BNE(addr) => {
                     if !self.flags.contains(Flag::Zero) {
+                        #[cfg(debug_assertions)]
+                        if prev_pc == addr {
+                            return;
+                        }
+
                         tick(self, 1 + 2 * page_crossed(pc, addr) as u8);
                         pc = addr;
                     }
@@ -357,11 +365,15 @@ impl<'a> Cpu<'a> {
                 Instr::SEC => self.flags.insert(Flag::Carry),
                 Instr::SED => self.flags.insert(Flag::Decimal),
                 Instr::SEI => self.flags.insert(Flag::InterruptDisable),
+                // https://github.com/bugzmanov/nes_ebook/blob/master/code/ch8/src/cpu.rs#L692
                 Instr::BRK => {
-                    self.push_u16(pc);
-                    self.push(self.flags.into_u8(false));
-                    self.flags.insert(Flag::InterruptDisable);
-                    pc = self.memory.read_u16(0xfffe)
+                    pc = pc.wrapping_add(1);
+                    if !self.flags.contains(Flag::InterruptDisable) {
+                        self.push_u16(pc);
+                        self.push(self.flags.into_u8(false));
+                        self.flags.insert(Flag::InterruptDisable);
+                        pc = self.memory.read_u16(0xfffe)
+                    }
                 }
                 Instr::NOP => {}
                 Instr::RTS => {

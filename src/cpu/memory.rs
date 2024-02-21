@@ -29,11 +29,14 @@ impl<'a> Memory<'a> {
             }
         };
 
-        match region {
+        let res = match region {
             Region::Owned(mem) => mem[offset as usize],
             Region::Mirror { offset: delta, len } => self.read_u8(*delta + (offset % *len)),
             Region::Closure { read, .. } => read(offset),
-        }
+        };
+
+        log::trace!("Read '0x{res:02X}' from address '0x{addr:04X}'");
+        return res;
     }
 
     pub fn write_u8(&mut self, addr: u16, value: u8) {
@@ -53,6 +56,8 @@ impl<'a> Memory<'a> {
             }
             Region::Closure { write, .. } => write(offset, value),
         };
+
+        log::trace!("Wrote '0x{value:02X}' to address '0x{addr:04X}'");
     }
 
     pub fn read_u16(&self, addr: u16) -> u16 {

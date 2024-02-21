@@ -63,9 +63,16 @@ pub enum Instr {
 }
 
 impl Instr {
-    pub fn cycles(&self) -> u8 {
+    pub fn cycles(self) -> u8 {
         match self {
-            Instr::LDA(op) | Instr::LDX(op) | Instr::LDY(op) => op.memory_cycles(),
+            Instr::ADC(op)
+            | Instr::SBC(op)
+            | Instr::CMP(op)
+            | Instr::LDA(op)
+            | Instr::LDX(op)
+            | Instr::LDY(op)
+            | Instr::CPX(op)
+            | Instr::CPY(op) => op.memory_cycles(),
             Instr::STA(addr) | Instr::STX(addr) | Instr::STY(addr) => addr.memory_cycles(),
             Instr::TAX => 2,
             Instr::TAY => 2,
@@ -78,16 +85,16 @@ impl Instr {
             Instr::PLA => 4,
             Instr::PLP => 4,
             Instr::AND(op) | Instr::EOR(op) | Instr::ORA(op) => op.memory_cycles(),
-            Instr::BIT(_) => todo!(),
-            Instr::ADC(_) => todo!(),
-            Instr::SBC(_) => todo!(),
-            Instr::CMP(_) => todo!(),
-            Instr::CPX(_) => todo!(),
-            Instr::CPY(_) => todo!(),
-            Instr::INC(_) => todo!(),
+            Instr::BIT(Addressing::ZeroPage(_)) => 3,
+            Instr::BIT(Addressing::Absolute(_)) => 4,
+            Instr::BIT(_) => unreachable!(),
+            Instr::INC(Addressing::ZeroPage(_)) | Instr::DEC(Addressing::ZeroPage(_)) => 5,
+            Instr::INC(Addressing::ZeroPageX(_)) | Instr::DEC(Addressing::ZeroPageX(_)) => 6,
+            Instr::INC(Addressing::Absolute(_)) | Instr::DEC(Addressing::Absolute(_)) => 6,
+            Instr::INC(Addressing::AbsoluteX(_)) | Instr::DEC(Addressing::AbsoluteX(_)) => 7,
+            Instr::INC(_) | Instr::DEC(_) => unreachable!(),
             Instr::INX => 2,
             Instr::INY => 2,
-            Instr::DEC(_) => todo!(),
             Instr::DEX => 2,
             Instr::DEY => 2,
             Instr::ASL(op) | Instr::LSR(op) | Instr::ROL(op) | Instr::ROR(op) => op.shift_cycles(),
@@ -95,14 +102,14 @@ impl Instr {
             Instr::JMPIndirect(_) => 5,
             Instr::JSR(_) => 6,
             Instr::RTS => 6,
-            Instr::BCC(_) => todo!(),
-            Instr::BCS(_) => todo!(),
-            Instr::BEQ(_) => todo!(),
-            Instr::BMI(_) => todo!(),
-            Instr::BNE(_) => todo!(),
-            Instr::BPL(_) => todo!(),
-            Instr::BVC(_) => todo!(),
-            Instr::BVS(_) => todo!(),
+            Instr::BCC(_)
+            | Instr::BCS(_)
+            | Instr::BEQ(_)
+            | Instr::BMI(_)
+            | Instr::BNE(_)
+            | Instr::BPL(_)
+            | Instr::BVC(_)
+            | Instr::BVS(_) => 2,
             Instr::CLC => 2,
             Instr::CLD => 2,
             Instr::CLI => 2,
