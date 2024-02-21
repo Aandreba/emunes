@@ -62,14 +62,14 @@ impl<'a> Memory<'a> {
 
     pub fn read_u16(&self, addr: u16) -> u16 {
         let lo = self.read_u8(addr);
-        let hi = self.read_u8(addr + 1);
+        let hi = self.read_u8(addr.wrapping_add(1));
         return u16::from_le_bytes([lo, hi]);
     }
 
     pub fn write_u16(&mut self, addr: u16, value: u16) {
         let [lo, hi] = value.to_le_bytes();
         self.write_u8(addr, lo);
-        self.write_u8(addr + 1, hi);
+        self.write_u8(addr.wrapping_add(1), hi);
     }
 
     pub fn copy_from(&mut self, offset: u16, src: &[u8]) {
