@@ -365,15 +365,12 @@ impl<'a> Cpu<'a> {
                 Instr::SEC => self.flags.insert(Flag::Carry),
                 Instr::SED => self.flags.insert(Flag::Decimal),
                 Instr::SEI => self.flags.insert(Flag::InterruptDisable),
-                // https://github.com/bugzmanov/nes_ebook/blob/master/code/ch8/src/cpu.rs#L692
+                // https://github.com/kromych/yamos6502/blob/main/src/yamos6502.rs#L698
                 Instr::BRK => {
-                    if !self.flags.contains(Flag::InterruptDisable) {
-                        pc = pc.wrapping_add(1);
-                        self.push_u16(pc);
-                        self.push(self.flags.into_u8(false));
-                        self.flags.insert(Flag::InterruptDisable);
-                        pc = self.memory.read_u16(0xfffe)
-                    }
+                    self.push_u16(pc.wrapping_add(1));
+                    self.push(self.flags.into_u8(false));
+                    self.flags.insert(Flag::InterruptDisable);
+                    pc = self.memory.read_u16(0xfffe);
                 }
                 Instr::NOP => {}
                 Instr::RTS => {

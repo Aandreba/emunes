@@ -17,5 +17,6 @@ fn functional() {
     let mut cpu = Cpu::new(memory);
     cpu.run(0x400, |cpu, cycles| println!("{cpu:#02X?}"));
 
+    h.flush();
     drop(h);
 }
