@@ -430,8 +430,8 @@ impl<'a> Cpu<'a> {
     pub fn get_addressing(&self, addr: Addressing) -> (u16, bool) {
         match addr {
             Addressing::ZeroPage(addr) => (addr as u16, false),
-            Addressing::ZeroPageX(base) => ((base as u16).wrapping_add(self.x as u16), false),
-            Addressing::ZeroPageY(base) => ((base as u16).wrapping_add(self.y as u16), false),
+            Addressing::ZeroPageX(base) => (base.wrapping_add(self.x) as u16, false),
+            Addressing::ZeroPageY(base) => (base.wrapping_add(self.y) as u16, false),
             Addressing::Absolute(addr) => (addr, false),
             Addressing::AbsoluteX(base) => {
                 let addr = base.wrapping_add(self.x as u16);
@@ -442,8 +442,7 @@ impl<'a> Cpu<'a> {
                 (addr, page_crossed(base, addr))
             }
             Addressing::IndexedIndirect(base) => (
-                self.memory
-                    .read_u16((base as u16).wrapping_add(self.x as u16)),
+                self.memory.read_u16(base.wrapping_add(self.x) as u16),
                 false,
             ),
             Addressing::IndirectIndexed(base) => {
