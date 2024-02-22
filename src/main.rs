@@ -1,5 +1,4 @@
 use std::time::Duration;
-
 use emunes::cpu::{
     memory::{create_linear_memory, debug::DebugMemory, Memory},
     Cpu,
@@ -11,8 +10,6 @@ pub fn main() {
 
     let h = flexi_logger::Logger::try_with_str("trace")
         .unwrap()
-        .log_to_file(FileSpec::default().directory("./logs").suppress_timestamp())
-        .duplicate_to_stderr(Duplicate::All)
         .start()
         .unwrap();
 
@@ -20,15 +17,12 @@ pub fn main() {
     memory
         .copy_from(0x00, include_bytes!("../tests/6502_functional_test.bin"))
         .unwrap();
+    // invalid opcode will make emulation terminate
+    memory.write_u8(0x3469, 0xff).unwrap();
 
     let mut cpu = Cpu::new(memory);
-    cpu.run(0x400, |cpu, _| {
-        log::trace!("{cpu:#02X?}");
-    })
+    cpu.run(0x400, |_, _| {})
     .unwrap();
-
-    let (memory, history) = cpu.memory.into_parts();
-    println!("{:#?}", history.get(&0x000C));
 
     h.flush();
     drop(h);

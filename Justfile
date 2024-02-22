@@ -1,3 +1,2 @@
-mevi:
-    cargo build
-    mevi target/debug/emunes
+test:
+    cargo test --release
