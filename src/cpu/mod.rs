@@ -12,12 +12,12 @@ pub mod instrs;
 pub mod memory;
 
 pub struct Cpu<M> {
-    accumulator: u8,
-    x: u8,
-    y: u8,
-    stack_ptr: u8,
-    flags: Flags,
-    memory: M,
+    pub accumulator: u8,
+    pub x: u8,
+    pub y: u8,
+    pub stack_ptr: u8,
+    pub flags: Flags,
+    pub memory: M,
 }
 
 impl<M> Cpu<M> {
@@ -411,12 +411,14 @@ impl<M: Memory> Cpu<M> {
 
 // Stack Ops
 impl<M: Memory> Cpu<M> {
+    #[track_caller]
     pub fn push(&mut self, val: u8) -> Result<(), M::Error> {
         self.memory.write_u8(self.stack_addr(), val)?;
         self.stack_ptr = self.stack_ptr.wrapping_sub(1);
         return Ok(());
     }
 
+    #[track_caller]
     pub fn push_u16(&mut self, val: u16) -> Result<(), M::Error> {
         let [lo, hi] = val.to_le_bytes();
         self.push(hi)?;
@@ -424,11 +426,13 @@ impl<M: Memory> Cpu<M> {
         return Ok(());
     }
 
+    #[track_caller]
     pub fn pop(&mut self) -> Result<u8, M::Error> {
         self.stack_ptr = self.stack_ptr.wrapping_add(1);
         return self.memory.read_u8(self.stack_addr());
     }
 
+    #[track_caller]
     pub fn pop_u16(&mut self) -> Result<u16, M::Error> {
         let lo = self.pop()?;
         let hi = self.pop()?;
@@ -442,6 +446,7 @@ impl<M: Memory> Cpu<M> {
 
 // Operand ops
 impl<M: Memory> Cpu<M> {
+    #[track_caller]
     pub fn get_operand(&self, op: Operand) -> Result<(u8, bool), M::Error> {
         return Ok(match op {
             Operand::Accumulator => (self.accumulator, false),
@@ -453,6 +458,7 @@ impl<M: Memory> Cpu<M> {
         });
     }
 
+    #[track_caller]
     pub fn get_addressing(&self, addr: Addressing) -> Result<(u16, bool), M::Error> {
         return Ok(match addr {
             Addressing::ZeroPage(addr) => (addr as u16, false),
@@ -480,7 +486,7 @@ impl<M: Memory> Cpu<M> {
     }
 }
 
-impl<M: Debug> Debug for Cpu<M> {
+impl<M> Debug for Cpu<M> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Cpu")
             .field("accumulator", &self.accumulator)
