@@ -6,6 +6,7 @@ use self::{
 use crate::cpu::flags::Flag;
 use std::fmt::Debug;
 
+pub mod bcd;
 pub mod flags;
 pub mod instrs;
 pub mod memory;

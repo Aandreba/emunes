@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+use std::fmt::Debug;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(transparent)]
 pub struct Flags(u8);
 
@@ -44,6 +46,27 @@ impl Flags {
     #[inline(always)]
     pub fn from_u8(val: u8) -> Self {
         return Self((val & !(1 << 4)) | (1 << 5));
+    }
+}
+
+impl Debug for Flags {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut data = Vec::with_capacity(8);
+        for (flag, name) in [
+            (Flag::Carry as u8, "CARRY"),
+            (Flag::Zero as u8, "ZERO"),
+            (Flag::InterruptDisable as u8, "INTERRUPT_DISABLE"),
+            (Flag::Decimal as u8, "DECIMAL"),
+            (Flag::Overflow as u8, "OVERFLOW"),
+            (Flag::Negative as u8, "NEGATIVE"),
+            (4, "BREAK"),
+        ] {
+            if (self.0 >> flag) & 1 == 1 {
+                data.push(name);
+            }
+        }
+
+        return f.write_str(&data.join(" | "));
     }
 }
 
