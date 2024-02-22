@@ -13,6 +13,7 @@ pub mod bcd;
 pub mod flags;
 pub mod instrs;
 pub mod memory;
+pub mod backend;
 
 pub struct Cpu<M> {
     pub accumulator: u8,
