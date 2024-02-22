@@ -180,7 +180,7 @@ impl<'a> Cpu<'a> {
 
                     self.accumulator = unsigned;
                     self.flags.set_nz(self.accumulator);
-                    self.flags.set(Flag::Carry, next_carry);
+                    self.flags.set(Flag::Carry, !next_carry);
                     self.flags.set(Flag::Overflow, next_overflow);
 
                     if page_crossed {
@@ -240,13 +240,13 @@ impl<'a> Cpu<'a> {
                 Instr::ASL(Operand::Accumulator) => {
                     self.flags
                         .set(Flag::Carry, (self.accumulator as i8).is_negative());
-                    self.accumulator <<= 1;
+                    self.accumulator = self.accumulator.wrapping_shl(1);
                     self.flags.set_nz(self.accumulator);
                 }
                 Instr::ASL(Operand::Addressing(addr)) => {
                     let (addr, _) = self.get_addressing(addr);
                     let op = self.memory.read_u8(addr);
-                    let res = op << 1;
+                    let res = op.wrapping_shl(1);
                     self.memory.write_u8(addr, res);
 
                     self.flags.set(Flag::Carry, (op as i8).is_negative());
@@ -254,44 +254,60 @@ impl<'a> Cpu<'a> {
                 }
                 Instr::LSR(Operand::Accumulator) => {
                     self.flags.set(Flag::Carry, self.accumulator & 1 == 1);
-                    self.accumulator >>= 1;
+                    self.accumulator = self.accumulator.wrapping_shr(1);
                     self.flags.set_nz(self.accumulator);
                 }
                 Instr::LSR(Operand::Addressing(addr)) => {
                     let (addr, _) = self.get_addressing(addr);
                     let op = self.memory.read_u8(addr);
-                    let res = op >> 1;
+                    let res = op.wrapping_shr(1);
                     self.memory.write_u8(addr, res);
 
                     self.flags.set(Flag::Carry, op & 1 == 1);
                     self.flags.set_nz(self.accumulator);
                 }
+                // https://github.com/kromych/yamos6502/blob/main/src/yamos6502.rs#L491
                 Instr::ROL(Operand::Accumulator) => {
-                    self.flags
-                        .set(Flag::Carry, (self.accumulator as i8).is_negative());
-                    self.accumulator = self.accumulator.rotate_left(1);
+                    let prev_acc = self.accumulator;
+
+                    self.accumulator = self.accumulator.wrapping_shl(1);
+                    self.accumulator |= self.flags.contains(Flag::Carry) as u8;
+
+                    self.flags.set(Flag::Carry, (prev_acc as i8).is_negative());
                     self.flags.set_nz(self.accumulator);
                 }
                 Instr::ROL(Operand::Addressing(addr)) => {
                     let (addr, _) = self.get_addressing(addr);
                     let op = self.memory.read_u8(addr);
-                    let res = op.rotate_left(1);
-                    self.memory.write_u8(addr, res);
 
+                    let mut res = op.wrapping_shl(1);
+                    res |= self.flags.contains(Flag::Carry) as u8;
+
+                    self.memory.write_u8(addr, res);
                     self.flags.set(Flag::Carry, (op as i8).is_negative());
                     self.flags.set_nz(self.accumulator);
                 }
                 Instr::ROR(Operand::Accumulator) => {
-                    self.flags.set(Flag::Carry, self.accumulator & 1 == 1);
-                    self.accumulator = self.accumulator.rotate_right(1);
+                    let prev_acc = self.accumulator;
+
+                    self.accumulator = self.accumulator.wrapping_shr(1);
+                    if self.flags.contains(Flag::Carry) {
+                        self.accumulator |= 1 << 7;
+                    }
+
+                    self.flags.set(Flag::Carry, prev_acc & 1 == 1);
                     self.flags.set_nz(self.accumulator);
                 }
                 Instr::ROR(Operand::Addressing(addr)) => {
                     let (addr, _) = self.get_addressing(addr);
                     let op = self.memory.read_u8(addr);
-                    let res = op.rotate_right(1);
-                    self.memory.write_u8(addr, res);
 
+                    let mut res = op.wrapping_shr(1);
+                    if self.flags.contains(Flag::Carry) {
+                        res |= 1 << 7;
+                    }
+
+                    self.memory.write_u8(addr, res);
                     self.flags.set(Flag::Carry, op & 1 == 1);
                     self.flags.set_nz(self.accumulator);
                 }
