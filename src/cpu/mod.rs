@@ -11,17 +11,17 @@ pub mod flags;
 pub mod instrs;
 pub mod memory;
 
-pub struct Cpu<'a> {
+pub struct Cpu<M> {
     accumulator: u8,
     x: u8,
     y: u8,
     stack_ptr: u8,
     flags: Flags,
-    memory: Memory<'a>,
+    memory: M,
 }
 
-impl<'a> Cpu<'a> {
-    pub fn new(memory: Memory<'a>) -> Self {
+impl<M> Cpu<M> {
+    pub fn new(memory: M) -> Self {
         return Self {
             accumulator: 0,
             x: 0,
@@ -31,13 +31,19 @@ impl<'a> Cpu<'a> {
             memory,
         };
     }
+}
 
-    pub fn restart(&mut self, tick: impl FnMut(&mut Self, u8)) {
-        let pc = self.memory.read_u16(0xfffc);
+impl<M: Memory> Cpu<M> {
+    pub fn restart(&mut self, tick: impl FnMut(&mut Self, u8)) -> Result<(), M::Error> {
+        let pc = self.memory.read_u16(0xfffc)?;
         self.run(pc, tick)
     }
 
-    pub fn run(&mut self, mut pc: u16, mut tick: impl FnMut(&mut Self, u8)) {
+    pub fn run(
+        &mut self,
+        mut pc: u16,
+        mut tick: impl FnMut(&mut Self, u8),
+    ) -> Result<(), M::Error> {
         let mut prev_cycles = 0;
 
         loop {
@@ -45,15 +51,16 @@ impl<'a> Cpu<'a> {
             tick(self, prev_cycles);
 
             let instr = self
-                .read_instruction(&mut pc)
+                .read_instruction(&mut pc)?
                 .expect(&format!("unknown instruction found at 0x{prev_pc:04X}"));
+
             prev_cycles = instr.cycles();
 
             log::trace!("{prev_pc:04X}: {instr:04X?}");
 
             match instr {
                 Instr::LDA(op) => {
-                    let (op, page_crossed) = self.get_operand(op);
+                    let (op, page_crossed) = self.get_operand(op)?;
                     self.accumulator = op;
                     self.flags.set_nz(self.accumulator);
 
@@ -62,7 +69,7 @@ impl<'a> Cpu<'a> {
                     }
                 }
                 Instr::LDX(op) => {
-                    let (op, page_crossed) = self.get_operand(op);
+                    let (op, page_crossed) = self.get_operand(op)?;
                     self.x = op;
                     self.flags.set_nz(self.x);
 
@@ -71,7 +78,7 @@ impl<'a> Cpu<'a> {
                     }
                 }
                 Instr::LDY(op) => {
-                    let (op, page_crossed) = self.get_operand(op);
+                    let (op, page_crossed) = self.get_operand(op)?;
                     self.y = op;
                     self.flags.set_nz(self.y);
 
@@ -80,16 +87,16 @@ impl<'a> Cpu<'a> {
                     }
                 }
                 Instr::STA(addr) => {
-                    let (addr, _) = self.get_addressing(addr);
-                    self.memory.write_u8(addr, self.accumulator);
+                    let (addr, _) = self.get_addressing(addr)?;
+                    self.memory.write_u8(addr, self.accumulator)?;
                 }
                 Instr::STX(addr) => {
-                    let (addr, _) = self.get_addressing(addr);
-                    self.memory.write_u8(addr, self.x);
+                    let (addr, _) = self.get_addressing(addr)?;
+                    self.memory.write_u8(addr, self.x)?;
                 }
                 Instr::STY(addr) => {
-                    let (addr, _) = self.get_addressing(addr);
-                    self.memory.write_u8(addr, self.y);
+                    let (addr, _) = self.get_addressing(addr)?;
+                    self.memory.write_u8(addr, self.y)?;
                 }
                 Instr::TAX => {
                     self.x = self.accumulator;
@@ -112,15 +119,15 @@ impl<'a> Cpu<'a> {
                     self.flags.set_nz(self.x)
                 }
                 Instr::TXS => self.stack_ptr = self.x,
-                Instr::PHA => self.push(self.accumulator),
-                Instr::PHP => self.push(self.flags.into_u8(false)),
+                Instr::PHA => self.push(self.accumulator)?,
+                Instr::PHP => self.push(self.flags.into_u8(false))?,
                 Instr::PLA => {
-                    self.accumulator = self.pop();
+                    self.accumulator = self.pop()?;
                     self.flags.set_nz(self.accumulator)
                 }
-                Instr::PLP => self.flags = Flags::from_u8(self.pop()),
+                Instr::PLP => self.flags = Flags::from_u8(self.pop()?),
                 Instr::AND(op) => {
-                    let (op, page_crossed) = self.get_operand(op);
+                    let (op, page_crossed) = self.get_operand(op)?;
                     self.accumulator &= op;
                     self.flags.set_nz(self.accumulator);
 
@@ -129,7 +136,7 @@ impl<'a> Cpu<'a> {
                     }
                 }
                 Instr::EOR(op) => {
-                    let (op, page_crossed) = self.get_operand(op);
+                    let (op, page_crossed) = self.get_operand(op)?;
                     self.accumulator ^= op;
                     self.flags.set_nz(self.accumulator);
 
@@ -138,7 +145,7 @@ impl<'a> Cpu<'a> {
                     }
                 }
                 Instr::ORA(op) => {
-                    let (op, page_crossed) = self.get_operand(op);
+                    let (op, page_crossed) = self.get_operand(op)?;
                     self.accumulator |= op;
                     self.flags.set_nz(self.accumulator);
 
@@ -147,13 +154,13 @@ impl<'a> Cpu<'a> {
                     }
                 }
                 Instr::BIT(addr) => {
-                    let op = self.memory.read_u8(self.get_addressing(addr).0);
+                    let op = self.memory.read_u8(self.get_addressing(addr)?.0)?;
                     self.flags.set(Flag::Zero, (self.accumulator & op) == 0);
                     self.flags.set(Flag::Negative, (op as i8).is_negative());
                     self.flags.set(Flag::Overflow, (op >> 6) & 1 == 1);
                 }
                 Instr::ADC(op) => {
-                    let (op, page_crossed) = self.get_operand(op);
+                    let (op, page_crossed) = self.get_operand(op)?;
                     let carry = self.flags.contains(Flag::Carry);
 
                     let (unsigned, next_carry) = self.accumulator.carrying_add(op, carry);
@@ -171,7 +178,7 @@ impl<'a> Cpu<'a> {
                     }
                 }
                 Instr::SBC(op) => {
-                    let (op, page_crossed) = self.get_operand(op);
+                    let (op, page_crossed) = self.get_operand(op)?;
                     let carry = !self.flags.contains(Flag::Carry);
 
                     let (unsigned, next_carry) = self.accumulator.borrowing_sub(op, carry);
@@ -189,7 +196,7 @@ impl<'a> Cpu<'a> {
                     }
                 }
                 Instr::CMP(op) => {
-                    let (op, page_crossed) = self.get_operand(op);
+                    let (op, page_crossed) = self.get_operand(op)?;
                     self.flags.set(Flag::Carry, self.accumulator >= op);
                     self.flags.set(Flag::Zero, self.accumulator == op);
                     self.flags.set(Flag::Negative, self.accumulator < op);
@@ -199,21 +206,21 @@ impl<'a> Cpu<'a> {
                     }
                 }
                 Instr::CPX(op) => {
-                    let (op, _) = self.get_operand(op);
+                    let (op, _) = self.get_operand(op)?;
                     self.flags.set(Flag::Carry, self.x >= op);
                     self.flags.set(Flag::Zero, self.x == op);
                     self.flags.set(Flag::Negative, self.x < op);
                 }
                 Instr::CPY(op) => {
-                    let (op, _) = self.get_operand(op);
+                    let (op, _) = self.get_operand(op)?;
                     self.flags.set(Flag::Carry, self.y >= op);
                     self.flags.set(Flag::Zero, self.y == op);
                     self.flags.set(Flag::Negative, self.y < op);
                 }
                 Instr::INC(addr) => {
-                    let (addr, _) = self.get_addressing(addr);
-                    let res = self.memory.read_u8(addr).wrapping_add(1);
-                    self.memory.write_u8(addr, res);
+                    let (addr, _) = self.get_addressing(addr)?;
+                    let res = self.memory.read_u8(addr)?.wrapping_add(1);
+                    self.memory.write_u8(addr, res)?;
                     self.flags.set_nz(res)
                 }
                 Instr::INX => {
@@ -225,9 +232,9 @@ impl<'a> Cpu<'a> {
                     self.flags.set_nz(self.y);
                 }
                 Instr::DEC(addr) => {
-                    let (addr, _) = self.get_addressing(addr);
-                    let res = self.memory.read_u8(addr).wrapping_sub(1);
-                    self.memory.write_u8(addr, res);
+                    let (addr, _) = self.get_addressing(addr)?;
+                    let res = self.memory.read_u8(addr)?.wrapping_sub(1);
+                    self.memory.write_u8(addr, res)?;
                     self.flags.set_nz(res)
                 }
                 Instr::DEX => {
@@ -245,10 +252,10 @@ impl<'a> Cpu<'a> {
                     self.flags.set_nz(self.accumulator);
                 }
                 Instr::ASL(Operand::Addressing(addr)) => {
-                    let (addr, _) = self.get_addressing(addr);
-                    let op = self.memory.read_u8(addr);
+                    let (addr, _) = self.get_addressing(addr)?;
+                    let op = self.memory.read_u8(addr)?;
                     let res = op.wrapping_shl(1);
-                    self.memory.write_u8(addr, res);
+                    self.memory.write_u8(addr, res)?;
 
                     self.flags.set(Flag::Carry, (op as i8).is_negative());
                     self.flags.set_nz(self.accumulator);
@@ -259,10 +266,10 @@ impl<'a> Cpu<'a> {
                     self.flags.set_nz(self.accumulator);
                 }
                 Instr::LSR(Operand::Addressing(addr)) => {
-                    let (addr, _) = self.get_addressing(addr);
-                    let op = self.memory.read_u8(addr);
+                    let (addr, _) = self.get_addressing(addr)?;
+                    let op = self.memory.read_u8(addr)?;
                     let res = op.wrapping_shr(1);
-                    self.memory.write_u8(addr, res);
+                    self.memory.write_u8(addr, res)?;
 
                     self.flags.set(Flag::Carry, op & 1 == 1);
                     self.flags.set_nz(self.accumulator);
@@ -278,13 +285,13 @@ impl<'a> Cpu<'a> {
                     self.flags.set_nz(self.accumulator);
                 }
                 Instr::ROL(Operand::Addressing(addr)) => {
-                    let (addr, _) = self.get_addressing(addr);
-                    let op = self.memory.read_u8(addr);
+                    let (addr, _) = self.get_addressing(addr)?;
+                    let op = self.memory.read_u8(addr)?;
 
                     let mut res = op.wrapping_shl(1);
                     res |= self.flags.contains(Flag::Carry) as u8;
 
-                    self.memory.write_u8(addr, res);
+                    self.memory.write_u8(addr, res)?;
                     self.flags.set(Flag::Carry, (op as i8).is_negative());
                     self.flags.set_nz(self.accumulator);
                 }
@@ -300,15 +307,15 @@ impl<'a> Cpu<'a> {
                     self.flags.set_nz(self.accumulator);
                 }
                 Instr::ROR(Operand::Addressing(addr)) => {
-                    let (addr, _) = self.get_addressing(addr);
-                    let op = self.memory.read_u8(addr);
+                    let (addr, _) = self.get_addressing(addr)?;
+                    let op = self.memory.read_u8(addr)?;
 
                     let mut res = op.wrapping_shr(1);
                     if self.flags.contains(Flag::Carry) {
                         res |= 1 << 7;
                     }
 
-                    self.memory.write_u8(addr, res);
+                    self.memory.write_u8(addr, res)?;
                     self.flags.set(Flag::Carry, op & 1 == 1);
                     self.flags.set_nz(self.accumulator);
                 }
@@ -317,9 +324,9 @@ impl<'a> Cpu<'a> {
                 | Instr::ROL(Operand::Immediate(_))
                 | Instr::ROR(Operand::Immediate(_)) => unreachable!(),
                 Instr::JMP(addr) => pc = addr,
-                Instr::JMPIndirect(base) => pc = self.memory.read_u16(base),
+                Instr::JMPIndirect(base) => pc = self.memory.read_u16(base)?,
                 Instr::JSR(addr) => {
-                    self.push_u16(pc.wrapping_sub(1));
+                    self.push_u16(pc.wrapping_sub(1))?;
                     pc = addr
                 }
                 Instr::BCC(addr) => {
@@ -350,7 +357,7 @@ impl<'a> Cpu<'a> {
                     if !self.flags.contains(Flag::Zero) {
                         #[cfg(debug_assertions)]
                         if prev_pc == addr {
-                            return;
+                            return Ok(());
                         }
 
                         tick(self, 1 + 2 * page_crossed(pc, addr) as u8);
@@ -384,18 +391,18 @@ impl<'a> Cpu<'a> {
                 Instr::SEI => self.flags.insert(Flag::InterruptDisable),
                 // https://github.com/kromych/yamos6502/blob/main/src/yamos6502.rs#L698
                 Instr::BRK => {
-                    self.push_u16(pc.wrapping_add(1));
-                    self.push(self.flags.into_u8(false));
+                    self.push_u16(pc.wrapping_add(1))?;
+                    self.push(self.flags.into_u8(false))?;
                     self.flags.insert(Flag::InterruptDisable);
-                    pc = self.memory.read_u16(0xfffe);
+                    pc = self.memory.read_u16(0xfffe)?;
                 }
                 Instr::NOP => {}
                 Instr::RTS => {
-                    pc = self.pop_u16().wrapping_add(1);
+                    pc = self.pop_u16()?.wrapping_add(1);
                 }
                 Instr::RTI => {
-                    self.flags = Flags::from_u8(self.pop());
-                    pc = self.pop_u16();
+                    self.flags = Flags::from_u8(self.pop()?);
+                    pc = self.pop_u16()?;
                 }
             }
         }
@@ -403,27 +410,29 @@ impl<'a> Cpu<'a> {
 }
 
 // Stack Ops
-impl<'a> Cpu<'a> {
-    pub fn push(&mut self, val: u8) {
-        self.memory.write_u8(self.stack_addr(), val);
+impl<M: Memory> Cpu<M> {
+    pub fn push(&mut self, val: u8) -> Result<(), M::Error> {
+        self.memory.write_u8(self.stack_addr(), val)?;
         self.stack_ptr = self.stack_ptr.wrapping_sub(1);
+        return Ok(());
     }
 
-    pub fn push_u16(&mut self, val: u16) {
+    pub fn push_u16(&mut self, val: u16) -> Result<(), M::Error> {
         let [lo, hi] = val.to_le_bytes();
-        self.push(hi);
-        self.push(lo);
+        self.push(hi)?;
+        self.push(lo)?;
+        return Ok(());
     }
 
-    pub fn pop(&mut self) -> u8 {
+    pub fn pop(&mut self) -> Result<u8, M::Error> {
         self.stack_ptr = self.stack_ptr.wrapping_add(1);
         return self.memory.read_u8(self.stack_addr());
     }
 
-    pub fn pop_u16(&mut self) -> u16 {
-        let lo = self.pop();
-        let hi = self.pop();
-        return u16::from_le_bytes([lo, hi]);
+    pub fn pop_u16(&mut self) -> Result<u16, M::Error> {
+        let lo = self.pop()?;
+        let hi = self.pop()?;
+        return Ok(u16::from_le_bytes([lo, hi]));
     }
 
     fn stack_addr(&self) -> u16 {
@@ -432,20 +441,20 @@ impl<'a> Cpu<'a> {
 }
 
 // Operand ops
-impl<'a> Cpu<'a> {
-    pub fn get_operand(&self, op: Operand) -> (u8, bool) {
-        match op {
+impl<M: Memory> Cpu<M> {
+    pub fn get_operand(&self, op: Operand) -> Result<(u8, bool), M::Error> {
+        return Ok(match op {
             Operand::Accumulator => (self.accumulator, false),
             Operand::Immediate(val) => (val, false),
             Operand::Addressing(addr) => {
-                let (addr, page_crossed) = self.get_addressing(addr);
-                (self.memory.read_u8(addr), page_crossed)
+                let (addr, page_crossed) = self.get_addressing(addr)?;
+                (self.memory.read_u8(addr)?, page_crossed)
             }
-        }
+        });
     }
 
-    pub fn get_addressing(&self, addr: Addressing) -> (u16, bool) {
-        match addr {
+    pub fn get_addressing(&self, addr: Addressing) -> Result<(u16, bool), M::Error> {
+        return Ok(match addr {
             Addressing::ZeroPage(addr) => (addr as u16, false),
             Addressing::ZeroPageX(base) => (base.wrapping_add(self.x) as u16, false),
             Addressing::ZeroPageY(base) => (base.wrapping_add(self.y) as u16, false),
@@ -459,19 +468,19 @@ impl<'a> Cpu<'a> {
                 (addr, page_crossed(base, addr))
             }
             Addressing::IndexedIndirect(base) => (
-                self.memory.read_u16(base.wrapping_add(self.x) as u16),
+                self.memory.read_u16(base.wrapping_add(self.x) as u16)?,
                 false,
             ),
             Addressing::IndirectIndexed(base) => {
-                let base = self.memory.read_u16(base as u16);
+                let base = self.memory.read_u16(base as u16)?;
                 let addr = base.wrapping_add(self.y as u16);
                 (addr, page_crossed(base, addr))
             }
-        }
+        });
     }
 }
 
-impl Debug for Cpu<'_> {
+impl<M: Debug> Debug for Cpu<M> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Cpu")
             .field("accumulator", &self.accumulator)

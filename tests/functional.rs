@@ -1,4 +1,7 @@
-use emunes::cpu::{memory::Memory, Cpu};
+use emunes::cpu::{
+    memory::{LinearMemory, Memory},
+    Cpu,
+};
 use flexi_logger::{Duplicate, FileSpec, WriteMode};
 
 #[test]
@@ -11,7 +14,7 @@ fn functional() {
         .start()
         .unwrap();
 
-    let mut memory = Memory::new();
+    let mut memory = LinearMemory::new();
     memory.copy_from(0x00, include_bytes!("6502_functional_test.bin"));
 
     let mut cpu = Cpu::new(memory);
