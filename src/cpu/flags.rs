@@ -66,7 +66,7 @@ impl Debug for Flags {
             }
         }
 
-        return f.write_str(&data.join(" | "));
+        return write!(f, "{} (0x{:02X})", &data.join(" | "), self.0);
     }
 }
 

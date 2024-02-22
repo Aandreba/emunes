@@ -258,7 +258,7 @@ impl<M: Memory> Cpu<M> {
                     self.memory.write_u8(addr, res)?;
 
                     self.flags.set(Flag::Carry, (op as i8).is_negative());
-                    self.flags.set_nz(self.accumulator);
+                    self.flags.set_nz(res);
                 }
                 Instr::LSR(Operand::Accumulator) => {
                     self.flags.set(Flag::Carry, self.accumulator & 1 == 1);
@@ -272,7 +272,7 @@ impl<M: Memory> Cpu<M> {
                     self.memory.write_u8(addr, res)?;
 
                     self.flags.set(Flag::Carry, op & 1 == 1);
-                    self.flags.set_nz(self.accumulator);
+                    self.flags.set_nz(res);
                 }
                 // https://github.com/kromych/yamos6502/blob/main/src/yamos6502.rs#L491
                 Instr::ROL(Operand::Accumulator) => {
@@ -293,7 +293,7 @@ impl<M: Memory> Cpu<M> {
 
                     self.memory.write_u8(addr, res)?;
                     self.flags.set(Flag::Carry, (op as i8).is_negative());
-                    self.flags.set_nz(self.accumulator);
+                    self.flags.set_nz(res);
                 }
                 Instr::ROR(Operand::Accumulator) => {
                     let prev_acc = self.accumulator;
@@ -317,7 +317,7 @@ impl<M: Memory> Cpu<M> {
 
                     self.memory.write_u8(addr, res)?;
                     self.flags.set(Flag::Carry, op & 1 == 1);
-                    self.flags.set_nz(self.accumulator);
+                    self.flags.set_nz(res);
                 }
                 Instr::ASL(Operand::Immediate(_))
                 | Instr::LSR(Operand::Immediate(_))
