@@ -520,7 +520,7 @@ impl<M: Memory> Cpu<M> {
             0x8e => Instr::STX(Addressing::Absolute(reader.next_u16()?)),
             // STY
             0x84 => Instr::STY(Addressing::ZeroPage(reader.next_u8()?)),
-            0x94 => Instr::STY(Addressing::ZeroPageY(reader.next_u8()?)),
+            0x94 => Instr::STY(Addressing::ZeroPageX(reader.next_u8()?)),
             0x8c => Instr::STY(Addressing::Absolute(reader.next_u16()?)),
             // Transfers
             0xaa => Instr::TAX,
