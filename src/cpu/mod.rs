@@ -3,7 +3,10 @@ use self::{
     instrs::{page_crossed, Addressing, Instr, Operand},
     memory::Memory,
 };
-use crate::cpu::flags::Flag;
+use crate::cpu::{
+    bcd::{bcd_to_u8, u8_to_bcd},
+    flags::Flag,
+};
 use std::fmt::Debug;
 
 pub mod bcd;
@@ -17,6 +20,7 @@ pub struct Cpu<M> {
     pub y: u8,
     pub stack_ptr: u8,
     pub flags: Flags,
+    pub decimal_enabled: bool,
     pub memory: M,
 }
 
@@ -28,8 +32,17 @@ impl<M> Cpu<M> {
             y: 0,
             stack_ptr: 0xfe,
             flags: Flags::default(),
+            decimal_enabled: true,
             memory,
         };
+    }
+
+    pub fn disable_decimal_mode(&mut self) {
+        self.decimal_enabled = false
+    }
+
+    pub fn enable_decimal_mode(mut self) {
+        self.decimal_enabled = true
     }
 }
 
@@ -159,37 +172,81 @@ impl<M: Memory> Cpu<M> {
                     self.flags.set(Flag::Negative, (op as i8).is_negative());
                     self.flags.set(Flag::Overflow, (op >> 6) & 1 == 1);
                 }
+                // https://github.com/kromych/yamos6502/blob/main/src/yamos6502.rs#L578
                 Instr::ADC(op) => {
                     let (op, page_crossed) = self.get_operand(op)?;
                     let carry = self.flags.contains(Flag::Carry);
+                    let decimal = self.flags.contains(Flag::Decimal);
 
-                    let (unsigned, next_carry) = self.accumulator.carrying_add(op, carry);
-                    let (signed, next_overflow) =
-                        (self.accumulator as i8).carrying_add(op as i8, carry);
-                    debug_assert_eq!(unsigned, signed as u8);
+                    let res = if decimal && self.decimal_enabled {
+                        // Decimal
+                        let mut res = bcd_to_u8(self.accumulator)
+                            .wrapping_add(bcd_to_u8(op))
+                            .wrapping_add(carry as u8);
 
-                    self.accumulator = unsigned;
-                    self.flags.set_nz(self.accumulator);
-                    self.flags.set(Flag::Carry, next_carry);
-                    self.flags.set(Flag::Overflow, next_overflow);
+                        if res > 99 {
+                            res -= 100;
+                            self.flags.insert(Flag::Carry);
+                        } else {
+                            self.flags.remove(Flag::Carry);
+                        }
+
+                        u8_to_bcd(res) as u16
+                    } else {
+                        // Binary
+                        let op = op as u16;
+                        let acc = self.accumulator as u16;
+                        let res = acc.wrapping_add(op).wrapping_add(carry as u16);
+
+                        self.flags
+                            .set(Flag::Overflow, (acc ^ res) & (op ^ res) & 0x0080 != 0);
+                        self.flags.set(Flag::Carry, res & 0xff00 != 0);
+                        res
+                    };
+
+                    self.accumulator = res as u8;
+                    self.flags.set(Flag::Zero, res & 0xff == 0);
+                    self.flags.set(Flag::Negative, res & 0x80 != 0);
 
                     if page_crossed {
                         tick(self, 1)
                     }
                 }
+                // https://github.com/kromych/yamos6502/blob/main/src/yamos6502.rs#L628
                 Instr::SBC(op) => {
                     let (op, page_crossed) = self.get_operand(op)?;
-                    let carry = !self.flags.contains(Flag::Carry);
+                    let borrow = !self.flags.contains(Flag::Carry);
+                    let decimal = self.flags.contains(Flag::Decimal);
 
-                    let (unsigned, next_carry) = self.accumulator.borrowing_sub(op, carry);
-                    let (signed, next_overflow) =
-                        (self.accumulator as i8).borrowing_sub(op as i8, carry);
-                    debug_assert_eq!(unsigned, signed as u8);
+                    let res = if decimal && self.decimal_enabled {
+                        // Decimal
+                        let mut res = bcd_to_u8(self.accumulator)
+                            .wrapping_sub(bcd_to_u8(op))
+                            .wrapping_sub(borrow as u8) as i8;
 
-                    self.accumulator = unsigned;
-                    self.flags.set_nz(self.accumulator);
-                    self.flags.set(Flag::Carry, !next_carry);
-                    self.flags.set(Flag::Overflow, next_overflow);
+                        if res.is_negative() {
+                            res += 100;
+                            self.flags.remove(Flag::Carry);
+                        } else {
+                            self.flags.insert(Flag::Carry);
+                        }
+
+                        u8_to_bcd(res as u8) as u16
+                    } else {
+                        // Binary
+                        let op = op as u16;
+                        let acc = self.accumulator as u16;
+                        let res = acc.wrapping_sub(op).wrapping_sub(borrow as u16);
+
+                        self.flags
+                            .set(Flag::Overflow, (acc ^ res) & (!op ^ res) & 0x0080 != 0);
+                        self.flags.set(Flag::Carry, res & 0xff00 == 0);
+                        res
+                    };
+
+                    self.accumulator = res as u8;
+                    self.flags.set(Flag::Zero, res & 0xff == 0);
+                    self.flags.set(Flag::Negative, res & 0x80 != 0);
 
                     if page_crossed {
                         tick(self, 1)

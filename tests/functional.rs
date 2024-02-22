@@ -17,6 +17,8 @@ fn functional() {
     memory
         .copy_from(0x00, include_bytes!("6502_functional_test.bin"))
         .unwrap();
+    // invalid opcode will make emulation terminate
+    memory.write_u8(0x3469, 0xff).unwrap();
 
     let mut cpu = Cpu::new(memory);
     cpu.run(0x400, |cpu, _| {

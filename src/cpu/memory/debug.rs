@@ -38,7 +38,7 @@ impl<M: Memory> Memory for DebugMemory<M> {
     #[track_caller]
     fn read_u8(&self, addr: u16) -> Result<u8, Self::Error> {
         let val = self.memory.read_u8(addr)?;
-        // log::trace!("Read '0x{val:02X}' from '0x{addr:04X}'");
+        log::trace!("Read '0x{val:02X}' from '0x{addr:04X}'");
 
         unwrap_lock(self.history.lock())
             .entry(addr)
@@ -56,7 +56,7 @@ impl<M: Memory> Memory for DebugMemory<M> {
     #[track_caller]
     fn write_u8(&mut self, addr: u16, val: u8) -> Result<(), Self::Error> {
         self.memory.write_u8(addr, val)?;
-        // log::trace!("Wrote '0x{val:02X}' to '0x{addr:04X}'");
+        log::trace!("Wrote '0x{val:02X}' to '0x{addr:04X}'");
 
         unwrap_lock(self.history.get_mut())
             .entry(addr)
