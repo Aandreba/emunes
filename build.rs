@@ -5,7 +5,7 @@ use xz2::read::XzDecoder;
 
 pub fn main() -> color_eyre::Result<()> {
     color_eyre::install().unwrap();
-    download_llvm()?;
+    // download_llvm()?;
 
     return Ok(());
 }
@@ -32,7 +32,7 @@ fn download_llvm() -> color_eyre::Result<()> {
         archive.unpack(&llvm_path)?;
     }
 
-    let llvm_path = Config::new(llvm_path.join("llvm-17.0.6.src")).build();
+    let llvm_path = Config::new(llvm_path.join("llvm-project-17.0.6.src/llvm")).build();
     println!(
         "cargo:rustc-env=LLVM_SYS_170_PREFIX={}",
         llvm_path.display()
