@@ -1,28 +1,32 @@
+use std::convert::Infallible;
+
 use super::Backend;
 use crate::cpu::{
     bcd::{bcd_to_u8, u8_to_bcd},
     flags::{Flag, Flags},
-    instrs::{page_crossed, Instr, Operand},
+    instrs::{page_crossed, read_instruction, Instr, Operand},
     memory::Memory,
-    Cpu,
+    Cpu, RunError,
 };
 
 pub struct Interpreter;
 
 impl Backend for Interpreter {
+    type Error = Infallible;
+
     fn run<M: Memory>(
         cpu: &mut Cpu<M, Self>,
         mut pc: u16,
         mut tick: impl FnMut(u8),
-    ) -> Result<(), M::Error> {
+    ) -> Result<(), RunError<M, Self>> {
         let mut prev_cycles = 0;
 
         loop {
             let prev_pc = pc;
             tick(prev_cycles);
 
-            let instr = cpu
-                .read_instruction(&mut pc)?
+            let instr = read_instruction(&cpu.memory, &mut pc)
+                .map_err(RunError::Memory)?
                 .expect(&format!("unknown instruction found at 0x{prev_pc:04X}"));
 
             prev_cycles = instr.cycles();
@@ -59,15 +63,17 @@ impl Backend for Interpreter {
                 }
                 Instr::STA(addr) => {
                     let (addr, _) = cpu.get_addressing(addr)?;
-                    cpu.memory.write_u8(addr, cpu.accumulator)?;
+                    cpu.memory
+                        .write_u8(addr, cpu.accumulator)
+                        .map_err(RunError::Memory)?;
                 }
                 Instr::STX(addr) => {
                     let (addr, _) = cpu.get_addressing(addr)?;
-                    cpu.memory.write_u8(addr, cpu.x)?;
+                    cpu.memory.write_u8(addr, cpu.x).map_err(RunError::Memory)?;
                 }
                 Instr::STY(addr) => {
                     let (addr, _) = cpu.get_addressing(addr)?;
-                    cpu.memory.write_u8(addr, cpu.y)?;
+                    cpu.memory.write_u8(addr, cpu.y).map_err(RunError::Memory)?;
                 }
                 Instr::TAX => {
                     cpu.x = cpu.accumulator;
@@ -125,7 +131,10 @@ impl Backend for Interpreter {
                     }
                 }
                 Instr::BIT(addr) => {
-                    let op = cpu.memory.read_u8(cpu.get_addressing(addr)?.0)?;
+                    let op = cpu
+                        .memory
+                        .read_u8(cpu.get_addressing(addr)?.0)
+                        .map_err(RunError::Memory)?;
                     cpu.flags.set(Flag::Zero, (cpu.accumulator & op) == 0);
                     cpu.flags.set(Flag::Negative, (op as i8).is_negative());
                     cpu.flags.set(Flag::Overflow, (op >> 6) & 1 == 1);
@@ -234,8 +243,12 @@ impl Backend for Interpreter {
                 }
                 Instr::INC(addr) => {
                     let (addr, _) = cpu.get_addressing(addr)?;
-                    let res = cpu.memory.read_u8(addr)?.wrapping_add(1);
-                    cpu.memory.write_u8(addr, res)?;
+                    let res = cpu
+                        .memory
+                        .read_u8(addr)
+                        .map_err(RunError::Memory)?
+                        .wrapping_add(1);
+                    cpu.memory.write_u8(addr, res).map_err(RunError::Memory)?;
                     cpu.flags.set_nz(res)
                 }
                 Instr::INX => {
@@ -248,8 +261,12 @@ impl Backend for Interpreter {
                 }
                 Instr::DEC(addr) => {
                     let (addr, _) = cpu.get_addressing(addr)?;
-                    let res = cpu.memory.read_u8(addr)?.wrapping_sub(1);
-                    cpu.memory.write_u8(addr, res)?;
+                    let res = cpu
+                        .memory
+                        .read_u8(addr)
+                        .map_err(RunError::Memory)?
+                        .wrapping_sub(1);
+                    cpu.memory.write_u8(addr, res).map_err(RunError::Memory)?;
                     cpu.flags.set_nz(res)
                 }
                 Instr::DEX => {
@@ -268,9 +285,9 @@ impl Backend for Interpreter {
                 }
                 Instr::ASL(Operand::Addressing(addr)) => {
                     let (addr, _) = cpu.get_addressing(addr)?;
-                    let op = cpu.memory.read_u8(addr)?;
+                    let op = cpu.memory.read_u8(addr).map_err(RunError::Memory)?;
                     let res = op.wrapping_shl(1);
-                    cpu.memory.write_u8(addr, res)?;
+                    cpu.memory.write_u8(addr, res).map_err(RunError::Memory)?;
 
                     cpu.flags.set(Flag::Carry, (op as i8).is_negative());
                     cpu.flags.set_nz(res);
@@ -282,9 +299,9 @@ impl Backend for Interpreter {
                 }
                 Instr::LSR(Operand::Addressing(addr)) => {
                     let (addr, _) = cpu.get_addressing(addr)?;
-                    let op = cpu.memory.read_u8(addr)?;
+                    let op = cpu.memory.read_u8(addr).map_err(RunError::Memory)?;
                     let res = op.wrapping_shr(1);
-                    cpu.memory.write_u8(addr, res)?;
+                    cpu.memory.write_u8(addr, res).map_err(RunError::Memory)?;
 
                     cpu.flags.set(Flag::Carry, op & 1 == 1);
                     cpu.flags.set_nz(res);
@@ -301,12 +318,12 @@ impl Backend for Interpreter {
                 }
                 Instr::ROL(Operand::Addressing(addr)) => {
                     let (addr, _) = cpu.get_addressing(addr)?;
-                    let op = cpu.memory.read_u8(addr)?;
+                    let op = cpu.memory.read_u8(addr).map_err(RunError::Memory)?;
 
                     let mut res = op.wrapping_shl(1);
                     res |= cpu.flags.contains(Flag::Carry) as u8;
 
-                    cpu.memory.write_u8(addr, res)?;
+                    cpu.memory.write_u8(addr, res).map_err(RunError::Memory)?;
                     cpu.flags.set(Flag::Carry, (op as i8).is_negative());
                     cpu.flags.set_nz(res);
                 }
@@ -323,14 +340,14 @@ impl Backend for Interpreter {
                 }
                 Instr::ROR(Operand::Addressing(addr)) => {
                     let (addr, _) = cpu.get_addressing(addr)?;
-                    let op = cpu.memory.read_u8(addr)?;
+                    let op = cpu.memory.read_u8(addr).map_err(RunError::Memory)?;
 
                     let mut res = op.wrapping_shr(1);
                     if cpu.flags.contains(Flag::Carry) {
                         res |= 1 << 7;
                     }
 
-                    cpu.memory.write_u8(addr, res)?;
+                    cpu.memory.write_u8(addr, res).map_err(RunError::Memory)?;
                     cpu.flags.set(Flag::Carry, op & 1 == 1);
                     cpu.flags.set_nz(res);
                 }
@@ -339,7 +356,9 @@ impl Backend for Interpreter {
                 | Instr::ROL(Operand::Immediate(_))
                 | Instr::ROR(Operand::Immediate(_)) => unreachable!(),
                 Instr::JMP(addr) => pc = addr,
-                Instr::JMPIndirect(base) => pc = cpu.memory.read_u16(base)?,
+                Instr::JMPIndirect(base) => {
+                    pc = cpu.memory.read_u16(base).map_err(RunError::Memory)?
+                }
                 Instr::JSR(addr) => {
                     cpu.push_u16(pc.wrapping_sub(1))?;
                     pc = addr
@@ -409,7 +428,7 @@ impl Backend for Interpreter {
                     cpu.push_u16(pc.wrapping_add(1))?;
                     cpu.push(cpu.flags.into_u8(false))?;
                     cpu.flags.insert(Flag::InterruptDisable);
-                    pc = cpu.memory.read_u16(0xfffe)?;
+                    pc = cpu.memory.read_u16(0xfffe).map_err(RunError::Memory)?;
                 }
                 Instr::NOP => {}
                 Instr::RTS => {

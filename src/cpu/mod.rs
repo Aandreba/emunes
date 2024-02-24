@@ -47,13 +47,13 @@ impl<M, B> Cpu<M, B> {
 }
 
 impl<M: Memory, B: Backend> Cpu<M, B> {
-    pub fn restart(&mut self, tick: impl FnMut(u8)) -> Result<(), M::Error> {
-        let pc = self.memory.read_u16(0xfffc)?;
+    pub fn restart(&mut self, tick: impl FnMut(u8)) -> Result<(), RunError<M, B>> {
+        let pc = self.memory.read_u16(0xfffc).map_err(RunError::Memory)?;
         self.run(pc, tick)
     }
 
     #[inline(always)]
-    pub fn run(&mut self, pc: u16, tick: impl FnMut(u8)) -> Result<(), M::Error> {
+    pub fn run(&mut self, pc: u16, tick: impl FnMut(u8)) -> Result<(), RunError<M, B>> {
         return B::run(self, pc, tick);
     }
 }
@@ -61,14 +61,16 @@ impl<M: Memory, B: Backend> Cpu<M, B> {
 // Stack Ops
 impl<M: Memory, B: Backend> Cpu<M, B> {
     #[track_caller]
-    pub fn push(&mut self, val: u8) -> Result<(), M::Error> {
-        self.memory.write_u8(self.stack_addr(), val)?;
+    pub fn push(&mut self, val: u8) -> Result<(), RunError<M, B>> {
+        self.memory
+            .write_u8(self.stack_addr(), val)
+            .map_err(RunError::Memory)?;
         self.stack_ptr = self.stack_ptr.wrapping_sub(1);
         return Ok(());
     }
 
     #[track_caller]
-    pub fn push_u16(&mut self, val: u16) -> Result<(), M::Error> {
+    pub fn push_u16(&mut self, val: u16) -> Result<(), RunError<M, B>> {
         let [lo, hi] = val.to_le_bytes();
         self.push(hi)?;
         self.push(lo)?;
@@ -76,13 +78,16 @@ impl<M: Memory, B: Backend> Cpu<M, B> {
     }
 
     #[track_caller]
-    pub fn pop(&mut self) -> Result<u8, M::Error> {
+    pub fn pop(&mut self) -> Result<u8, RunError<M, B>> {
         self.stack_ptr = self.stack_ptr.wrapping_add(1);
-        return self.memory.read_u8(self.stack_addr());
+        return self
+            .memory
+            .read_u8(self.stack_addr())
+            .map_err(RunError::Memory);
     }
 
     #[track_caller]
-    pub fn pop_u16(&mut self) -> Result<u16, M::Error> {
+    pub fn pop_u16(&mut self) -> Result<u16, RunError<M, B>> {
         let lo = self.pop()?;
         let hi = self.pop()?;
         return Ok(u16::from_le_bytes([lo, hi]));
@@ -96,19 +101,22 @@ impl<M: Memory, B: Backend> Cpu<M, B> {
 // Operand ops
 impl<M: Memory, B: Backend> Cpu<M, B> {
     #[track_caller]
-    pub fn get_operand(&self, op: Operand) -> Result<(u8, bool), M::Error> {
+    pub fn get_operand(&self, op: Operand) -> Result<(u8, bool), RunError<M, B>> {
         return Ok(match op {
             Operand::Accumulator => (self.accumulator, false),
             Operand::Immediate(val) => (val, false),
             Operand::Addressing(addr) => {
                 let (addr, page_crossed) = self.get_addressing(addr)?;
-                (self.memory.read_u8(addr)?, page_crossed)
+                (
+                    self.memory.read_u8(addr).map_err(RunError::Memory)?,
+                    page_crossed,
+                )
             }
         });
     }
 
     #[track_caller]
-    pub fn get_addressing(&self, addr: Addressing) -> Result<(u16, bool), M::Error> {
+    pub fn get_addressing(&self, addr: Addressing) -> Result<(u16, bool), RunError<M, B>> {
         return Ok(match addr {
             Addressing::ZeroPage(addr) => (addr as u16, false),
             Addressing::ZeroPageX(base) => (base.wrapping_add(self.x) as u16, false),
@@ -123,11 +131,16 @@ impl<M: Memory, B: Backend> Cpu<M, B> {
                 (addr, page_crossed(base, addr))
             }
             Addressing::IndexedIndirect(base) => (
-                self.memory.read_u16(base.wrapping_add(self.x) as u16)?,
+                self.memory
+                    .read_u16(base.wrapping_add(self.x) as u16)
+                    .map_err(RunError::Memory)?,
                 false,
             ),
             Addressing::IndirectIndexed(base) => {
-                let base = self.memory.read_u16(base as u16)?;
+                let base = self
+                    .memory
+                    .read_u16(base as u16)
+                    .map_err(RunError::Memory)?;
                 let addr = base.wrapping_add(self.y as u16);
                 (addr, page_crossed(base, addr))
             }
@@ -145,5 +158,21 @@ impl<M, B: Debug> Debug for Cpu<M, B> {
             .field("flags", &self.flags)
             .field("backend", &self.backend)
             .finish_non_exhaustive()
+    }
+}
+
+pub enum RunError<M: Memory, B: Backend> {
+    Memory(M::Error),
+    Backend(B::Error),
+    UnknownOpcode(u16),
+}
+
+impl<M: Memory, B: Backend> Debug for RunError<M, B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Memory(arg0) => f.debug_tuple("Memory").field(arg0).finish(),
+            Self::Backend(arg0) => f.debug_tuple("Backend").field(arg0).finish(),
+            Self::UnknownOpcode(arg0) => f.debug_tuple("UnknownOpcode").field(arg0).finish(),
+        }
     }
 }

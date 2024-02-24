@@ -1,3 +1,12 @@
+%ExternCpu = type {
+    i8,         ; accumulator
+    i8,         ; x
+    i8,         ; y
+    i8,         ; stack pointer
+    i8,         ; flags
+    %UserData
+}
+
 %Cpu = type {
     i8,         ; accumulator
     i8,         ; x
@@ -10,7 +19,9 @@
 %UserData = type {
     ptr, ; tick
     ptr, ; read_u8
+    ptr, ; read_u16
     ptr  ; write_u8
+    ptr, ; write_u16
 }
 
 ; Stack Ops
@@ -112,4 +123,6 @@ entry:
 ; Imported functions
 declare void @_tick(i8, ptr)
 declare i8 @_read_u8(i16, ptr)
+declare i16 @_read_u16(i16, ptr)
 declare void @_write_u8(i16, i8, ptr)
+declare void @_write_u16(i16, i16, ptr)
