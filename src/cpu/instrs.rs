@@ -1,4 +1,4 @@
-use super::Cpu;
+use super::{backend::Backend, Cpu};
 use crate::cpu::memory::Memory;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -188,7 +188,7 @@ impl Operand {
     }
 }
 
-impl<M: Memory> Cpu<M> {
+impl<M: Memory, B: Backend> Cpu<M, B> {
     // http://www.6502.org/users/obelisk/6502/reference.html
     pub fn read_instruction(&self, pc: &mut u16) -> Result<Option<Instr>, M::Error> {
         struct Reader<'a, M>(&'a M, &'a mut u16);

@@ -1,9 +1,9 @@
-use std::time::Duration;
 use emunes::cpu::{
+    backend::interpreter::Interpreter,
     memory::{create_linear_memory, debug::DebugMemory, Memory},
     Cpu,
 };
-use flexi_logger::{Duplicate, FileSpec};
+use std::time::Duration;
 
 pub fn main() {
     std::thread::sleep(Duration::from_secs(2));
@@ -20,9 +20,8 @@ pub fn main() {
     // invalid opcode will make emulation terminate
     memory.write_u8(0x3469, 0xff).unwrap();
 
-    let mut cpu = Cpu::new(memory);
-    cpu.run(0x400, |_, _| {})
-    .unwrap();
+    let mut cpu = Cpu::new(memory, Interpreter);
+    cpu.run(0x400, |_, _| {}).unwrap();
 
     h.flush();
     drop(h);
