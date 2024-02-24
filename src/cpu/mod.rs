@@ -47,13 +47,13 @@ impl<M, B> Cpu<M, B> {
 }
 
 impl<M: Memory, B: Backend> Cpu<M, B> {
-    pub fn restart(&mut self, tick: impl FnMut(&mut Self, u8)) -> Result<(), M::Error> {
+    pub fn restart(&mut self, tick: impl FnMut(u8)) -> Result<(), M::Error> {
         let pc = self.memory.read_u16(0xfffc)?;
         self.run(pc, tick)
     }
 
     #[inline(always)]
-    pub fn run(&mut self, pc: u16, tick: impl FnMut(&mut Self, u8)) -> Result<(), M::Error> {
+    pub fn run(&mut self, pc: u16, tick: impl FnMut(u8)) -> Result<(), M::Error> {
         return B::run(self, pc, tick);
     }
 }

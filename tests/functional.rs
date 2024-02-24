@@ -19,7 +19,7 @@ fn functional() {
     memory.write_u8(0x3469, 0xff).unwrap();
 
     let mut cpu = Cpu::new(memory, Interpreter);
-    cpu.run(0x400, |_, _| {}).unwrap();
+    cpu.run(0x400, |_| {}).unwrap();
 
     h.flush();
     drop(h);
