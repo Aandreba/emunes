@@ -533,8 +533,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             self.get_flag(Flag::Decimal)?,
             self.cx
                 .bool_type()
-                // .const_int(self.decimal_enabled as u64, false),
-                .const_int(true as u64, false),
+                .const_int(self.decimal_enabled as u64, false),
             "",
         )?;
 
