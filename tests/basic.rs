@@ -45,6 +45,8 @@ fn basic_adc() {
 
     let cx = Context::create();
     let mut cpu = Cpu::new(memory, Llvm::new(&cx).unwrap());
+    cpu.disable_decimal_mode();
+
     cpu.run(0x00, |_| {}).unwrap();
     cpu.backend.print_to_stderr();
 

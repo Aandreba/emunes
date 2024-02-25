@@ -607,8 +607,9 @@ impl<'a, 'b> Builder<'a, 'b> {
         // Return
         self.block = continue_block;
         self.builder.position_at_end(continue_block);
-
         self.accumulator = accumulator.as_basic_value().into_int_value();
+
+        self.set_nz(self.accumulator)?;
         self.set_flag(Flag::Carry, next_carry.as_basic_value().into_int_value())?;
         self.set_flag(
             Flag::Overflow,
