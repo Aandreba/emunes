@@ -561,6 +561,7 @@ dependencies = [
  "cmake",
  "color-eyre",
  "dirs",
+ "ffi-closure",
  "flexi_logger",
  "inkwell",
  "log",
@@ -615,6 +616,16 @@ name = "fastrand"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25cbce373ec4653f1a01a31e8a5e5ec0c622dc27ff9c4e6606eefef5cbbed4a5"
+
+[[package]]
+name = "ffi-closure"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42161af33ed75a61b084fb9cb5f7fc7bcd79eda4a3eda7c8bfe0b672576fc5b8"
+dependencies = [
+ "cfg-if",
+ "docfg",
+]
 
 [[package]]
 name = "filetime"

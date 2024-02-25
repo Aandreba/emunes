@@ -4,12 +4,12 @@ use crate::cpu::{
     instrs::{read_instruction, Addressing, Instr, Operand},
     RunError,
 };
+use ffi_closure::Closure;
 use inkwell::{
     basic_block::BasicBlock,
     builder::BuilderError,
     context::Context,
     execution_engine::ExecutionEngine,
-    intrinsics::Intrinsic,
     memory_buffer::MemoryBuffer,
     module::Module,
     support::LLVMString,
@@ -84,9 +84,18 @@ impl<'a> Backend for Llvm<'a> {
                         Instr::LDA(op) => builder.lda(op),
                         Instr::LDX(op) => builder.ldx(op),
                         Instr::LDY(op) => builder.ldy(op),
-                        Instr::STA(addr) => builder.get_address(addr),
-                        Instr::STX(addr) => builder.get_address(addr),
-                        Instr::STY(addr) => builder.get_address(addr),
+                        Instr::STA(addr) => {
+                            let (addr, _) = builder.get_address(addr).map_err(RunError::Backend)?;
+                            builder.write_u8(addr, builder.accumulator)
+                        }
+                        Instr::STX(addr) => {
+                            let (addr, _) = builder.get_address(addr).map_err(RunError::Backend)?;
+                            builder.write_u8(addr, builder.x)
+                        }
+                        Instr::STY(addr) => {
+                            let (addr, _) = builder.get_address(addr).map_err(RunError::Backend)?;
+                            builder.write_u8(addr, builder.y)
+                        }
                         Instr::TAX => {
                             builder.x = builder.accumulator;
                             builder.set_nz(builder.accumulator)
@@ -134,11 +143,51 @@ impl<'a> Backend for Llvm<'a> {
                         Instr::CPX(_) => todo!(),
                         Instr::CPY(_) => todo!(),
                         Instr::INC(_) => todo!(),
-                        Instr::INX => todo!(),
-                        Instr::INY => todo!(),
+                        Instr::INX => {
+                            builder.x = builder
+                                .builder
+                                .build_int_add(
+                                    builder.x,
+                                    builder.cx.i8_type().const_int(1, false),
+                                    "",
+                                )
+                                .map_err(RunError::Backend)?;
+                            builder.set_nz(builder.x)
+                        }
+                        Instr::INY => {
+                            builder.y = builder
+                                .builder
+                                .build_int_add(
+                                    builder.y,
+                                    builder.cx.i8_type().const_int(1, false),
+                                    "",
+                                )
+                                .map_err(RunError::Backend)?;
+                            builder.set_nz(builder.y)
+                        }
                         Instr::DEC(_) => todo!(),
-                        Instr::DEX => todo!(),
-                        Instr::DEY => todo!(),
+                        Instr::DEX => {
+                            builder.y = builder
+                                .builder
+                                .build_int_sub(
+                                    builder.y,
+                                    builder.cx.i8_type().const_int(1, false),
+                                    "",
+                                )
+                                .map_err(RunError::Backend)?;
+                            builder.set_nz(builder.y)
+                        }
+                        Instr::DEY => {
+                            builder.y = builder
+                                .builder
+                                .build_int_sub(
+                                    builder.y,
+                                    builder.cx.i8_type().const_int(1, false),
+                                    "",
+                                )
+                                .map_err(RunError::Backend)?;
+                            builder.set_nz(builder.y)
+                        }
                         Instr::ASL(_) => todo!(),
                         Instr::LSR(_) => todo!(),
                         Instr::ROL(_) => todo!(),
@@ -178,8 +227,8 @@ impl<'a> Backend for Llvm<'a> {
                         Instr::SEC => todo!(),
                         Instr::SED => todo!(),
                         Instr::SEI => todo!(),
-                        Instr::BRK => todo!(),
-                        Instr::NOP => todo!(),
+                        Instr::BRK => break builder.brk(pc).map_err(RunError::Backend)?,
+                        Instr::NOP => Ok(()),
                         Instr::RTI => todo!(),
                         Instr::ASL(Operand::Immediate(_))
                         | Instr::LSR(Operand::Immediate(_))
@@ -189,9 +238,13 @@ impl<'a> Backend for Llvm<'a> {
                     .map_err(RunError::Backend)?;
                 };
 
-                todo!()
+                builder.ret(next_pc).map_err(RunError::Backend)?;
+                builder.fn_value
             }
         };
+
+        fn_value.print_to_stderr();
+        // let tick = Closure::<dyn FnMut(u8)>::new(tick);
 
         todo!()
     }
@@ -410,21 +463,36 @@ impl<'a, 'b> Builder<'a, 'b> {
         return Ok(());
     }
 
-    pub fn sta(&mut self, addr: Addressing) -> Result<(), BuilderError> {
-        let (addr, _) = self.get_address(addr)?;
-        self.write_u8(addr, self.accumulator)?;
-        return Ok(());
+    pub fn brk(&mut self, pc: u16) -> Result<IntValue<'a>, BuilderError> {
+        self.push_u16(
+            self.cx
+                .i16_type()
+                .const_int(pc.wrapping_add(1) as u64, false),
+        )?;
+        self.push(self.flags_to_int(false)?)?;
+        self.set_flag(
+            Flag::InterruptDisable,
+            self.cx.bool_type().const_int(1, false),
+        )?;
+
+        return self.read_u16(self.cx.i16_type().const_int(0xfffe, false));
     }
 
-    pub fn stx(&mut self, addr: Addressing) -> Result<(), BuilderError> {
-        let (addr, _) = self.get_address(addr)?;
-        self.write_u8(addr, self.x)?;
-        return Ok(());
-    }
+    pub fn ret(&mut self, pc: IntValue<'a>) -> Result<(), BuilderError> {
+        // Store cpu state
+        self.builder
+            .build_store(self.input_accumulator, self.accumulator)?;
+        self.builder.build_store(self.input_x, self.x)?;
+        self.builder.build_store(self.input_y, self.y)?;
+        self.builder
+            .build_store(self.input_stack_ptr, self.stack_ptr)?;
+        self.builder.build_store(
+            self.input_flags,
+            self.builder
+                .build_bitcast(self.flags, self.cx.i8_type(), "")?,
+        )?;
 
-    pub fn sty(&mut self, addr: Addressing) -> Result<(), BuilderError> {
-        let (addr, _) = self.get_address(addr)?;
-        self.write_u8(addr, self.y)?;
+        self.builder.build_return(Some(&pc))?;
         return Ok(());
     }
 }
