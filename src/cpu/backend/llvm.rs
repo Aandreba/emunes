@@ -12,6 +12,7 @@ use inkwell::{
     execution_engine::ExecutionEngine,
     memory_buffer::MemoryBuffer,
     module::Module,
+    passes::{PassManager, PassManagerBuilder},
     support::LLVMString,
     values::{AnyValue, FunctionValue, IntValue, PointerValue, StructValue, VectorValue},
     AddressSpace, IntPredicate, OptimizationLevel,
@@ -239,7 +240,15 @@ impl<'a> Backend for Llvm<'a> {
                 };
 
                 builder.ret(next_pc).map_err(RunError::Backend)?;
-                builder.fn_value
+                let fn_value = builder.fn_value;
+
+                let manager = PassManager::<FunctionValue>::create(&this.module);
+                let builder = PassManagerBuilder::create();
+                builder.set_optimization_level(OptimizationLevel::Less);
+                builder.populate_function_pass_manager(&manager);
+                manager.run_on(&fn_value);
+
+                fn_value
             }
         };
 
