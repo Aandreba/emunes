@@ -40,6 +40,12 @@ impl<'a> Llvm<'a> {
         let module = cx.create_module_from_ir(ir)?;
         let ee = module.create_jit_execution_engine(OptimizationLevel::Less)?;
 
+        for fn_value in module.get_functions() {
+            if fn_value.get_first_basic_block().is_some() {
+                optimize_fn(fn_value, &module)
+            }
+        }
+
         return Ok(Self {
             compiled: HashMap::new(),
             ee,
@@ -240,9 +246,6 @@ impl<'a> Llvm<'a> {
 
                 builder.ret(next_pc).map_err(RunError::Backend)?;
                 let fn_value = builder.fn_value;
-
-                #[cfg(debug_assertions)]
-                fn_value.print_to_stderr();
                 optimize_fn(fn_value, &this.module);
                 #[cfg(debug_assertions)]
                 fn_value.print_to_stderr();

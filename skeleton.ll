@@ -18,7 +18,7 @@
 }
 
 ; Binary ops
-define internal fastcc %BinaryResult @binary_adc(i8 %lhs, i8 %rhs, i1 %carry) {
+define internal %BinaryResult @binary_adc(i8 %lhs, i8 %rhs, i1 %carry) {
 entry:
     ; Zero-extend arguments
     %lhs_ext = zext i8 %lhs to i16
@@ -48,7 +48,7 @@ entry:
     ret %BinaryResult %8
 }
 
-define internal fastcc %BinaryResult @binary_sbc(i8 %lhs, i8 %rhs, i1 %borrow) {
+define internal %BinaryResult @binary_sbc(i8 %lhs, i8 %rhs, i1 %borrow) {
 entry:
     %carry = xor i1 %borrow, true
 
@@ -82,7 +82,7 @@ entry:
 }
 
 ; Decimal ops
-define internal fastcc %DecimalResult @decimal_adc(i8 %lhs, i8 %rhs, i1 %carry) {
+define internal %DecimalResult @decimal_adc(i8 %lhs, i8 %rhs, i1 %carry) {
 entry:
     ; Transform arguments
     %lhs_binary = call i8 @bcd_to_u8(i8 %lhs)
@@ -93,8 +93,8 @@ entry:
     %0 = add i8 %lhs_binary, %rhs_binary
     %1 = add i8 %0, %carry_ext
     %next_carry = icmp ugt i8 %1, 99
-    %delta = select i1 %next_carry, i8 100, i8 0
-    %2 = sub i8 %1, %delta
+    %offset = select i1 %next_carry, i8 100, i8 0
+    %2 = sub i8 %1, %offset
     %res = call i8 @u8_to_bcd(i8 %2)
 
     ; Return result
@@ -103,7 +103,7 @@ entry:
     ret %DecimalResult %4
 }
 
-define internal fastcc %DecimalResult @decimal_sbc(i8 %lhs, i8 %rhs, i1 %borrow) {
+define internal %DecimalResult @decimal_sbc(i8 %lhs, i8 %rhs, i1 %borrow) {
 entry:
     %carry = xor i1 %borrow, true
 
@@ -127,13 +127,13 @@ entry:
 }
 
 ; Binary Coded Decimal
-define internal fastcc i8 @u8_to_bcd(i8 %u) inlinehint {
+define internal i8 @u8_to_bcd(i8 %u) inlinehint {
 entry:
     %has_overflow.not = icmp ult i8 %u, 100
-    br i1 %has_overflow.not, label %overflow, label %transform
-transform:
-    ret i8 u0x00
+    br i1 %has_overflow.not, label %transform, label %overflow
 overflow:
+    ret i8 0
+transform:
     %0 = udiv i8 %u, 10
     %1 = urem i8 %u, 10
     %2 = shl i8 %0, 4
@@ -141,7 +141,7 @@ overflow:
     ret i8 %3
 }
 
-define internal fastcc i8 @bcd_to_u8(i8 %bcd) inlinehint {
+define internal i8 @bcd_to_u8(i8 %bcd) inlinehint {
 entry:
     %0 = lshr i8 %bcd, 4
     %1 = mul i8 %0, 10
