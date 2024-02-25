@@ -63,8 +63,8 @@ impl<'a> Llvm<'a> {
         let fn_value = match this.compiled.entry(pc) {
             Entry::Occupied(entry) => *entry.into_mut(),
             Entry::Vacant(_) => {
-                let mut builder =
-                    Builder::new(pc, &this.module, this.cx).map_err(RunError::Backend)?;
+                let mut builder = Builder::new(pc, cpu.decimal_enabled, &this.module, this.cx)
+                    .map_err(RunError::Backend)?;
                 let mut prev_cycles = 0;
 
                 let next_pc = loop {
@@ -137,7 +137,7 @@ impl<'a> Llvm<'a> {
                         Instr::EOR(_) => todo!(),
                         Instr::ORA(_) => todo!(),
                         Instr::BIT(_) => todo!(),
-                        Instr::ADC(_) => todo!(),
+                        Instr::ADC(op) => builder.adc(op),
                         Instr::SBC(_) => todo!(),
                         Instr::CMP(_) => todo!(),
                         Instr::CPX(_) => todo!(),
@@ -241,27 +241,12 @@ impl<'a> Llvm<'a> {
                 builder.ret(next_pc).map_err(RunError::Backend)?;
                 let fn_value = builder.fn_value;
 
-                let builder = PassManagerBuilder::create();
-                builder.set_optimization_level(OptimizationLevel::Aggressive);
-
-                let manager = PassManager::<FunctionValue>::create(&this.module);
-                manager.add_instruction_simplify_pass();
-                manager.add_instruction_combining_pass();
-                manager.add_ind_var_simplify_pass();
-                manager.add_cfg_simplification_pass();
-                manager.add_aggressive_dce_pass();
-                manager.add_cfg_simplification_pass();
-                manager.add_bit_tracking_dce_pass();
-                manager.add_correlated_value_propagation_pass();
-                manager.add_instruction_simplify_pass();
-                manager.add_instruction_combining_pass();
-                manager.add_new_gvn_pass();
-                manager.add_aggressive_dce_pass();
-                // builder.populate_function_pass_manager(&manager);
-                manager.run_on(&fn_value);
-
                 #[cfg(debug_assertions)]
                 fn_value.print_to_stderr();
+                optimize_fn(fn_value, &this.module);
+                #[cfg(debug_assertions)]
+                fn_value.print_to_stderr();
+
                 fn_value
             }
         };
@@ -329,11 +314,17 @@ pub struct Builder<'a, 'b> {
     builder: inkwell::builder::Builder<'a>,
     block: BasicBlock<'a>,
     module: &'b Module<'a>,
+    decimal_enabled: bool,
     cx: &'a Context,
 }
 
 impl<'a, 'b> Builder<'a, 'b> {
-    pub fn new(pc: u16, module: &'b Module<'a>, cx: &'a Context) -> Result<Self, BuilderError> {
+    pub fn new(
+        pc: u16,
+        decimal_enabled: bool,
+        module: &'b Module<'a>,
+        cx: &'a Context,
+    ) -> Result<Self, BuilderError> {
         let i8_ptr = cx.i8_type().ptr_type(AddressSpace::default());
         let user_data = module.get_struct_type("UserData").unwrap();
 
@@ -386,6 +377,7 @@ impl<'a, 'b> Builder<'a, 'b> {
                     "flags",
                 )?
                 .into_vector_value(),
+            decimal_enabled,
             user_data,
             common_return,
             block,
@@ -527,6 +519,100 @@ impl<'a, 'b> Builder<'a, 'b> {
         let (op, page_crossed) = self.get_operand(op)?;
         self.y = op;
         self.set_nz(op)?;
+        self.tick_if_page_crossed(self.cx.i8_type().const_int(1, false), page_crossed)?;
+        return Ok(());
+    }
+
+    pub fn adc(&mut self, op: Operand) -> Result<(), BuilderError> {
+        let (op, page_crossed) = self.get_operand(op)?;
+        let carry = self.get_flag(Flag::Carry)?;
+        let decimal = self.builder.build_and(
+            self.get_flag(Flag::Decimal)?,
+            self.cx
+                .bool_type()
+                // .const_int(self.decimal_enabled as u64, false),
+                .const_int(false as u64, false),
+            "",
+        )?;
+
+        let binary_block = self.cx.append_basic_block(self.fn_value, "");
+        let decimal_block = self.cx.append_basic_block(self.fn_value, "");
+
+        self.builder
+            .build_conditional_branch(decimal, decimal_block, binary_block)?;
+
+        // Build continue block
+        let continue_block = self.cx.append_basic_block(self.fn_value, "");
+        self.builder.position_at_end(continue_block);
+        let accumulator = self.builder.build_phi(self.cx.i8_type(), "")?;
+        let next_carry = self.builder.build_phi(self.cx.bool_type(), "")?;
+        let next_overflow = self.builder.build_phi(self.cx.bool_type(), "")?;
+
+        // Build decimal block
+        self.builder.position_at_end(decimal_block);
+        let decimal_res = self
+            .builder
+            .build_call(
+                self.module.get_function("decimal_adc").unwrap(),
+                &[self.accumulator.into(), op.into(), carry.into()],
+                "",
+            )?
+            .as_any_value_enum()
+            .into_struct_value();
+
+        accumulator.add_incoming(&[(
+            &self.builder.build_extract_value(decimal_res, 0, "")?,
+            decimal_block,
+        )]);
+
+        next_carry.add_incoming(&[(
+            &self.builder.build_extract_value(decimal_res, 1, "")?,
+            decimal_block,
+        )]);
+
+        next_overflow.add_incoming(&[(&self.get_flag(Flag::Overflow)?, decimal_block)]);
+        self.builder.build_unconditional_branch(continue_block)?;
+
+        // Build binary block
+        self.builder.position_at_end(binary_block);
+        let binary_res = self
+            .builder
+            .build_call(
+                self.module.get_function("binary_adc").unwrap(),
+                &[self.accumulator.into(), op.into(), carry.into()],
+                "",
+            )?
+            .as_any_value_enum()
+            .into_struct_value();
+
+        accumulator.add_incoming(&[(
+            &self.builder.build_extract_value(binary_res, 0, "")?,
+            binary_block,
+        )]);
+
+        next_carry.add_incoming(&[(
+            &self.builder.build_extract_value(binary_res, 1, "")?,
+            binary_block,
+        )]);
+
+        next_overflow.add_incoming(&[(
+            &self.builder.build_extract_value(binary_res, 2, "")?,
+            binary_block,
+        )]);
+
+        self.builder.build_unconditional_branch(continue_block)?;
+
+        // Return
+        self.block = continue_block;
+        self.builder.position_at_end(continue_block);
+
+        self.accumulator = accumulator.as_basic_value().into_int_value();
+        self.set_flag(Flag::Carry, next_carry.as_basic_value().into_int_value())?;
+        self.set_flag(
+            Flag::Overflow,
+            next_overflow.as_basic_value().into_int_value(),
+        )?;
+
         self.tick_if_page_crossed(self.cx.i8_type().const_int(1, false), page_crossed)?;
         return Ok(());
     }
@@ -839,8 +925,18 @@ impl<'a, 'b> Builder<'a, 'b> {
             self.cx.i8_type().const_int(flag as u64, false),
             "",
         )?;
-
         return Ok(());
+    }
+
+    pub fn get_flag(&self, flag: Flag) -> Result<IntValue<'a>, BuilderError> {
+        return Ok(self
+            .builder
+            .build_extract_element(
+                self.flags,
+                self.cx.i8_type().const_int(flag as u64, false),
+                "",
+            )?
+            .into_int_value());
     }
 }
 
@@ -1113,4 +1209,22 @@ impl<'a> CommonReturn<'a> {
         self.pc.add_incoming(&[(&next_pc, b.block)]);
         return Ok(());
     }
+}
+
+fn optimize_fn<'a>(fn_value: FunctionValue<'a>, module: &Module<'a>) {
+    let manager = PassManager::<FunctionValue>::create(module);
+    manager.add_instruction_simplify_pass();
+    manager.add_instruction_combining_pass();
+    manager.add_ind_var_simplify_pass();
+    manager.add_cfg_simplification_pass();
+    manager.add_aggressive_dce_pass();
+    manager.add_cfg_simplification_pass();
+    manager.add_bit_tracking_dce_pass();
+    manager.add_correlated_value_propagation_pass();
+    manager.add_instruction_simplify_pass();
+    manager.add_instruction_combining_pass();
+    manager.add_new_gvn_pass();
+    manager.add_aggressive_dce_pass();
+    // builder.populate_function_pass_manager(&manager);
+    manager.run_on(&fn_value);
 }
