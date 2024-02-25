@@ -6,8 +6,45 @@
     ptr  ; write_u16
 }
 
+%BinaryResult = type {
+    i8, ; result
+    i1, ; next carry
+    i1  ; next_overflow
+}
+
+; Binary ops
+define internal fastcc %BinaryResult @binary_adc(i8 %lhs, i8 %rhs, i1 %carry) {
+entry:
+    ; Zero-extend arguments
+    %lhs_ext = zext i8 %lhs to i16
+    %rhs_ext = zext i8 %rhs to i16
+    %carry_ext = zext i1 %carry to i16
+
+    ; Calculate result
+    %0 = add i16 %lhs_ext, %rhs_ext
+    %res_ext = add i16 %0, %carry_ext
+    %res = trunc i16 %res_ext to i8
+
+    ; Calculate next overflow
+    %1 = xor i16 %lhs_ext, %res_ext
+    %2 = xor i16 %rhs_ext, %res_ext
+    %3 = and i16 %1, %2
+    %4 = and i16 %3, u0x0080
+    %next_carry = icmp ne i16 %4, 0
+
+    ; Calculate next carry
+    %5 = and i16 %res_ext, u0xff00
+    %next_overflow = icmp ne i16 %5, 0
+
+    ; Return result
+    %6 = insertvalue %BinaryResult undef, i8 %res, 0
+    %7 = insertvalue %BinaryResult %6, i1 %next_carry, 1
+    %8 = insertvalue %BinaryResult %7, i1 %next_overflow, 2
+    ret %BinaryResult %8
+}
+
 ; Binary Coded Decimal
-define internal fastcc i8 @u8_to_bcd(i8 %u) {
+define internal fastcc i8 @u8_to_bcd(i8 %u) inlinehint {
 entry:
     %has_overflow = icmp ult i8 %u, 100
     br i1 %has_overflow, label %overflow, label %transform
@@ -21,7 +58,7 @@ overflow:
     ret i8 u0x00
 }
 
-define internal fastcc i8 @bcd_to_u8(i8 %bcd) {
+define internal fastcc i8 @bcd_to_u8(i8 %bcd) inlinehint {
 entry:
     %0 = lshr i8 %bcd, 4
     %1 = mul i8 %0, 10
