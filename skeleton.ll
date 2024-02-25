@@ -129,16 +129,16 @@ entry:
 ; Binary Coded Decimal
 define internal fastcc i8 @u8_to_bcd(i8 %u) inlinehint {
 entry:
-    %has_overflow = icmp ult i8 %u, 100
-    br i1 %has_overflow, label %overflow, label %transform
+    %has_overflow.not = icmp ult i8 %u, 100
+    br i1 %has_overflow.not, label %overflow, label %transform
 transform:
+    ret i8 u0x00
+overflow:
     %0 = udiv i8 %u, 10
     %1 = urem i8 %u, 10
     %2 = shl i8 %0, 4
     %3 = or i8 %1, %2
     ret i8 %3
-overflow:
-    ret i8 u0x00
 }
 
 define internal fastcc i8 @bcd_to_u8(i8 %bcd) inlinehint {
