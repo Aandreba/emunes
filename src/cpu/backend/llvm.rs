@@ -2,6 +2,7 @@ use super::Backend;
 use crate::cpu::{
     flags::{Flag, Flags},
     instrs::{read_instruction, Addressing, Instr, Operand},
+    memory::Memory,
     RunError,
 };
 use ffi_closure::Closure;
@@ -14,12 +15,13 @@ use inkwell::{
     module::Module,
     passes::{PassManager, PassManagerBuilder},
     support::LLVMString,
-    values::{AnyValue, FunctionValue, IntValue, PointerValue, StructValue, VectorValue},
+    values::{AnyValue, FunctionValue, IntValue, PhiValue, PointerValue, StructValue, VectorValue},
     AddressSpace, IntPredicate, OptimizationLevel,
 };
 use std::{
     collections::{hash_map::Entry, HashMap},
     ffi::c_void,
+    marker::PhantomData,
 };
 
 const SKELETON: &[u8] = include_bytes!("../../../skeleton.ll");
@@ -49,17 +51,14 @@ impl<'a> Llvm<'a> {
     pub fn print_to_stderr(&self) {
         self.module.print_to_stderr();
     }
-}
 
-impl<'a> Backend for Llvm<'a> {
-    type Error = BuilderError;
-
-    fn run<M: crate::cpu::memory::Memory>(
+    fn _run<M: crate::cpu::memory::Memory>(
         cpu: &mut crate::cpu::Cpu<M, Self>,
         mut pc: u16,
         tick: impl FnMut(u8),
-    ) -> Result<(), RunError<M, Self>> {
+    ) -> Result<u16, RunError<M, Self>> {
         let this = &mut cpu.backend;
+        let input_pc = pc;
 
         let fn_value = match this.compiled.entry(pc) {
             Entry::Occupied(entry) => *entry.into_mut(),
@@ -242,30 +241,81 @@ impl<'a> Backend for Llvm<'a> {
                 builder.ret(next_pc).map_err(RunError::Backend)?;
                 let fn_value = builder.fn_value;
 
-                let manager = PassManager::<FunctionValue>::create(&this.module);
                 let builder = PassManagerBuilder::create();
-                builder.set_optimization_level(OptimizationLevel::Less);
-                builder.populate_function_pass_manager(&manager);
+                builder.set_optimization_level(OptimizationLevel::Aggressive);
+
+                let manager = PassManager::<FunctionValue>::create(&this.module);
+                manager.add_instruction_simplify_pass();
+                manager.add_instruction_combining_pass();
+                manager.add_ind_var_simplify_pass();
+                manager.add_cfg_simplification_pass();
+                manager.add_aggressive_dce_pass();
+                manager.add_cfg_simplification_pass();
+                manager.add_bit_tracking_dce_pass();
+                manager.add_correlated_value_propagation_pass();
+                manager.add_instruction_simplify_pass();
+                manager.add_instruction_combining_pass();
+                manager.add_new_gvn_pass();
+                manager.add_aggressive_dce_pass();
+                // builder.populate_function_pass_manager(&manager);
                 manager.run_on(&fn_value);
 
+                #[cfg(debug_assertions)]
+                fn_value.print_to_stderr();
                 fn_value
             }
         };
 
-        fn_value.print_to_stderr();
-        // let tick = Closure::<dyn FnMut(u8)>::new(tick);
+        // Add tick mapping
+        let mut fns = ExecFns::new(&mut cpu.memory, tick);
+        let user_data = fns.setup(&this.module, &this.ee);
 
-        todo!()
+        unsafe {
+            let f = this
+                .ee
+                .get_function::<unsafe extern "C" fn(
+                    *mut u8,
+                    *mut u8,
+                    *mut u8,
+                    *mut u8,
+                    *mut Flags,
+                    UserData,
+                ) -> u16>(&input_pc.to_string())
+                .unwrap();
+
+            let res = f.call(
+                &mut cpu.accumulator,
+                &mut cpu.x,
+                &mut cpu.y,
+                &mut cpu.stack_ptr,
+                &mut cpu.flags,
+                user_data,
+            );
+
+            if let Some(e) = fns.take_last_error() {
+                return Err(RunError::Memory(e));
+            } else {
+                return Ok(res);
+            }
+        }
+    }
+}
+
+impl<'a> Backend for Llvm<'a> {
+    type Error = BuilderError;
+
+    fn run<M: crate::cpu::memory::Memory>(
+        cpu: &mut crate::cpu::Cpu<M, Self>,
+        pc: u16,
+        tick: impl FnMut(u8),
+    ) -> Result<(), RunError<M, Self>> {
+        let res = Self::_run(cpu, pc, tick)?;
+        println!("{res}");
+        return Ok(());
     }
 }
 
 pub struct Builder<'a, 'b> {
-    // Input
-    input_accumulator: PointerValue<'a>,
-    input_x: PointerValue<'a>,
-    input_y: PointerValue<'a>,
-    input_stack_ptr: PointerValue<'a>,
-    input_flags: PointerValue<'a>,
     // Cpu
     accumulator: IntValue<'a>,
     x: IntValue<'a>,
@@ -275,6 +325,7 @@ pub struct Builder<'a, 'b> {
     user_data: StructValue<'a>,
     // Misc
     fn_value: FunctionValue<'a>,
+    common_return: CommonReturn<'a>,
     builder: inkwell::builder::Builder<'a>,
     block: BasicBlock<'a>,
     module: &'b Module<'a>,
@@ -309,6 +360,15 @@ impl<'a, 'b> Builder<'a, 'b> {
         let input_stack_ptr = fn_value.get_nth_param(3).unwrap().into_pointer_value();
         let input_flags = fn_value.get_nth_param(4).unwrap().into_pointer_value();
         let user_data = fn_value.get_nth_param(5).unwrap().into_struct_value();
+        let common_return = CommonReturn::new(
+            input_accumulator,
+            input_x,
+            input_y,
+            input_stack_ptr,
+            input_flags,
+            fn_value,
+            cx,
+        )?;
 
         return Ok(Self {
             accumulator: builder
@@ -326,12 +386,8 @@ impl<'a, 'b> Builder<'a, 'b> {
                     "flags",
                 )?
                 .into_vector_value(),
-            input_accumulator,
-            input_x,
-            input_y,
-            input_stack_ptr,
-            input_flags,
             user_data,
+            common_return,
             block,
             builder,
             fn_value,
@@ -340,7 +396,10 @@ impl<'a, 'b> Builder<'a, 'b> {
         });
     }
 
-    pub fn get_operand(&self, op: Operand) -> Result<(IntValue<'a>, IntValue<'a>), BuilderError> {
+    pub fn get_operand(
+        &mut self,
+        op: Operand,
+    ) -> Result<(IntValue<'a>, IntValue<'a>), BuilderError> {
         Ok(match op {
             Operand::Accumulator => (self.accumulator, self.cx.bool_type().const_zero()),
             Operand::Immediate(imm) => (
@@ -355,7 +414,7 @@ impl<'a, 'b> Builder<'a, 'b> {
     }
 
     pub fn get_address(
-        &self,
+        &mut self,
         addr: Addressing,
     ) -> Result<(IntValue<'a>, IntValue<'a>), BuilderError> {
         let bool_type = self.cx.bool_type();
@@ -488,20 +547,9 @@ impl<'a, 'b> Builder<'a, 'b> {
     }
 
     pub fn ret(&mut self, pc: IntValue<'a>) -> Result<(), BuilderError> {
-        // Store cpu state
+        self.common_return.add_incoming(pc, self)?;
         self.builder
-            .build_store(self.input_accumulator, self.accumulator)?;
-        self.builder.build_store(self.input_x, self.x)?;
-        self.builder.build_store(self.input_y, self.y)?;
-        self.builder
-            .build_store(self.input_stack_ptr, self.stack_ptr)?;
-        self.builder.build_store(
-            self.input_flags,
-            self.builder
-                .build_bitcast(self.flags, self.cx.i8_type(), "")?,
-        )?;
-
-        self.builder.build_return(Some(&pc))?;
+            .build_unconditional_branch(self.common_return.block)?;
         return Ok(());
     }
 }
@@ -537,44 +585,130 @@ impl<'a, 'b> Builder<'a, 'b> {
         return Ok(());
     }
 
-    pub fn read_u8(&self, addr: IntValue<'a>) -> Result<IntValue<'a>, BuilderError> {
+    pub fn read_u8(&mut self, addr: IntValue<'a>) -> Result<IntValue<'a>, BuilderError> {
         let fn_value = self.module.get_function("_read_u8").unwrap();
         let user_data = self.builder.build_extract_value(self.user_data, 1, "")?;
 
-        return Ok(self
+        let res = self
             .builder
             .build_call(fn_value, &[addr.into(), user_data.into()], "")?
             .as_any_value_enum()
-            .into_int_value());
+            .into_int_value();
+
+        let is_neg = self.builder.build_int_compare(
+            IntPredicate::SLT,
+            res,
+            self.cx.i16_type().const_zero(),
+            "",
+        )?;
+
+        let continue_block = self.cx.append_basic_block(self.fn_value, "");
+        self.common_return
+            .add_incoming(self.cx.i16_type().get_poison(), self)?;
+
+        self.builder
+            .build_conditional_branch(is_neg, self.common_return.block, continue_block)?;
+
+        self.block = continue_block;
+        self.builder.position_at_end(continue_block);
+
+        return self.builder.build_int_truncate(res, self.cx.i8_type(), "");
     }
 
-    pub fn read_u16(&self, addr: IntValue<'a>) -> Result<IntValue<'a>, BuilderError> {
+    pub fn read_u16(&mut self, addr: IntValue<'a>) -> Result<IntValue<'a>, BuilderError> {
         let fn_value = self.module.get_function("_read_u16").unwrap();
         let user_data = self.builder.build_extract_value(self.user_data, 2, "")?;
 
-        return Ok(self
+        let res = self
             .builder
             .build_call(fn_value, &[addr.into(), user_data.into()], "")?
             .as_any_value_enum()
-            .into_int_value());
+            .into_int_value();
+
+        let is_neg = self.builder.build_int_compare(
+            IntPredicate::SLT,
+            res,
+            self.cx.i32_type().const_zero(),
+            "",
+        )?;
+
+        let continue_block = self.cx.append_basic_block(self.fn_value, "");
+        self.common_return
+            .add_incoming(self.cx.i16_type().get_poison(), self)?;
+
+        self.builder
+            .build_conditional_branch(is_neg, self.common_return.block, continue_block)?;
+
+        self.block = continue_block;
+        self.builder.position_at_end(continue_block);
+
+        return self.builder.build_int_truncate(res, self.cx.i16_type(), "");
     }
 
-    pub fn write_u8(&self, addr: IntValue<'a>, value: IntValue<'a>) -> Result<(), BuilderError> {
+    pub fn write_u8(
+        &mut self,
+        addr: IntValue<'a>,
+        value: IntValue<'a>,
+    ) -> Result<(), BuilderError> {
         let fn_value = self.module.get_function("_write_u8").unwrap();
         let user_data = self.builder.build_extract_value(self.user_data, 3, "")?;
 
+        let res = self
+            .builder
+            .build_call(fn_value, &[addr.into(), value.into(), user_data.into()], "")?
+            .as_any_value_enum()
+            .into_int_value();
+
+        let is_neg = self.builder.build_int_compare(
+            IntPredicate::SLT,
+            res,
+            self.cx.i8_type().const_zero(),
+            "",
+        )?;
+
+        let continue_block = self.cx.append_basic_block(self.fn_value, "");
+        self.common_return
+            .add_incoming(self.cx.i16_type().get_poison(), self)?;
+
         self.builder
-            .build_call(fn_value, &[addr.into(), value.into(), user_data.into()], "")?;
+            .build_conditional_branch(is_neg, self.common_return.block, continue_block)?;
+
+        self.block = continue_block;
+        self.builder.position_at_end(continue_block);
 
         return Ok(());
     }
 
-    pub fn write_u16(&self, addr: IntValue<'a>, value: IntValue<'a>) -> Result<(), BuilderError> {
+    pub fn write_u16(
+        &mut self,
+        addr: IntValue<'a>,
+        value: IntValue<'a>,
+    ) -> Result<(), BuilderError> {
         let fn_value = self.module.get_function("_write_u16").unwrap();
         let user_data = self.builder.build_extract_value(self.user_data, 4, "")?;
 
+        let res = self
+            .builder
+            .build_call(fn_value, &[addr.into(), value.into(), user_data.into()], "")?
+            .as_any_value_enum()
+            .into_int_value();
+
+        let is_neg = self.builder.build_int_compare(
+            IntPredicate::SLT,
+            res,
+            self.cx.i8_type().const_zero(),
+            "",
+        )?;
+
+        let continue_block = self.cx.append_basic_block(self.fn_value, "");
+        self.common_return
+            .add_incoming(self.cx.i16_type().get_poison(), self)?;
+
         self.builder
-            .build_call(fn_value, &[addr.into(), value.into(), user_data.into()], "")?;
+            .build_conditional_branch(is_neg, self.common_return.block, continue_block)?;
+
+        self.block = continue_block;
+        self.builder.position_at_end(continue_block);
 
         return Ok(());
     }
@@ -783,20 +917,200 @@ mod tests {
 }
 
 #[repr(C)]
-struct ExternCpu {
-    pub accumulator: u8,
-    pub x: u8,
-    pub y: u8,
-    pub stack_ptr: u8,
-    pub flags: Flags,
-    pub user_data: UserData,
-}
-
-#[repr(C)]
 struct UserData {
     pub tick: *mut c_void,
     pub read_u8: *mut c_void,
     pub read_u16: *mut c_void,
     pub write_u8: *mut c_void,
     pub write_u16: *mut c_void,
+}
+
+struct ExecInner<'a, M: Memory> {
+    last_error: Option<M::Error>,
+    memory: &'a mut M,
+}
+
+struct ExecFns<'a, M: Memory> {
+    pub tick: Closure<dyn 'a + FnMut(u8)>,
+    pub read_u8: unsafe extern "C" fn(u16, *mut c_void) -> i16,
+    pub read_u16: unsafe extern "C" fn(u16, *mut c_void) -> i32,
+    pub write_u8: unsafe extern "C" fn(u16, u8, *mut c_void) -> i8,
+    pub write_u16: unsafe extern "C" fn(u16, u16, *mut c_void) -> i8,
+    pub user_data: Box<ExecInner<'a, M>>,
+    _phtm: PhantomData<&'a mut &'a ()>,
+}
+
+impl<'a, M: Memory> ExecFns<'a, M> {
+    pub fn new(memory: &'a mut M, tick: impl 'a + FnMut(u8)) -> Self {
+        unsafe extern "C" fn read_u8<M: Memory>(addr: u16, user_data: *mut c_void) -> i16 {
+            let this = &mut *user_data.cast::<ExecInner<M>>();
+            return match this.memory.read_u8(addr) {
+                Ok(res) => res as i16,
+                Err(e) => {
+                    this.last_error = Some(e);
+                    -1
+                }
+            };
+        }
+
+        unsafe extern "C" fn read_u16<M: Memory>(addr: u16, user_data: *mut c_void) -> i32 {
+            let this = &mut *user_data.cast::<ExecInner<M>>();
+            return match this.memory.read_u16(addr) {
+                Ok(res) => res as i32,
+                Err(e) => {
+                    this.last_error = Some(e);
+                    -1
+                }
+            };
+        }
+
+        unsafe extern "C" fn write_u8<M: Memory>(addr: u16, val: u8, user_data: *mut c_void) -> i8 {
+            let this = &mut *user_data.cast::<ExecInner<M>>();
+            return match this.memory.write_u8(addr, val) {
+                Ok(_) => 0,
+                Err(e) => {
+                    this.last_error = Some(e);
+                    -1
+                }
+            };
+        }
+
+        unsafe extern "C" fn write_u16<M: Memory>(
+            addr: u16,
+            val: u16,
+            user_data: *mut c_void,
+        ) -> i8 {
+            let this = &mut *user_data.cast::<ExecInner<M>>();
+            return match this.memory.write_u16(addr, val) {
+                Ok(_) => 0,
+                Err(e) => {
+                    this.last_error = Some(e);
+                    -1
+                }
+            };
+        }
+
+        return Self {
+            tick: Closure::new(tick),
+            read_u8: read_u8::<M>,
+            read_u16: read_u16::<M>,
+            write_u8: write_u8::<M>,
+            write_u16: write_u16::<M>,
+            user_data: Box::new(ExecInner {
+                last_error: None,
+                memory,
+            }),
+            _phtm: PhantomData,
+        };
+    }
+
+    pub fn take_last_error(&mut self) -> Option<M::Error> {
+        return self.user_data.last_error.take();
+    }
+
+    pub fn setup<'cx>(&self, module: &Module<'cx>, ee: &ExecutionEngine<'cx>) -> UserData {
+        ee.add_global_mapping(
+            &module.get_function("_tick").unwrap(),
+            self.tick.fn_ptr() as usize,
+        );
+
+        ee.add_global_mapping(
+            &module.get_function("_read_u8").unwrap(),
+            self.read_u8 as usize,
+        );
+
+        ee.add_global_mapping(
+            &module.get_function("_read_u16").unwrap(),
+            self.read_u16 as usize,
+        );
+
+        ee.add_global_mapping(
+            &module.get_function("_write_u8").unwrap(),
+            self.write_u8 as usize,
+        );
+
+        ee.add_global_mapping(
+            &module.get_function("_write_u16").unwrap(),
+            self.write_u16 as usize,
+        );
+
+        let user_data = std::ptr::addr_of!(*self.user_data) as *mut c_void;
+        return UserData {
+            tick: self.tick.user_data(),
+            read_u8: user_data,
+            read_u16: user_data,
+            write_u8: user_data,
+            write_u16: user_data,
+        };
+    }
+}
+
+struct CommonReturn<'a> {
+    block: BasicBlock<'a>,
+    accumulator: PhiValue<'a>,
+    x: PhiValue<'a>,
+    y: PhiValue<'a>,
+    stack_ptr: PhiValue<'a>,
+    flags: PhiValue<'a>,
+    pc: PhiValue<'a>,
+}
+
+impl<'a> CommonReturn<'a> {
+    pub fn new(
+        input_accumulator: PointerValue<'a>,
+        input_x: PointerValue<'a>,
+        input_y: PointerValue<'a>,
+        input_stack_ptr: PointerValue<'a>,
+        input_flags: PointerValue<'a>,
+        fn_value: FunctionValue<'a>,
+        cx: &'a Context,
+    ) -> Result<Self, BuilderError> {
+        let builder = cx.create_builder();
+        let block = cx.append_basic_block(fn_value, "common.ret");
+        builder.position_at_end(block);
+
+        let accumulator = builder.build_phi(cx.i8_type(), "output_acc")?;
+        let x = builder.build_phi(cx.i8_type(), "output_x")?;
+        let y = builder.build_phi(cx.i8_type(), "output_y")?;
+        let stack_ptr = builder.build_phi(cx.i8_type(), "output_stack_ptr")?;
+        let flags = builder.build_phi(cx.i8_type(), "output_flags")?;
+        let pc = builder.build_phi(cx.i16_type(), "output_pc")?;
+
+        // Store cpu state
+        builder.build_store(
+            input_accumulator,
+            accumulator.as_basic_value().into_int_value(),
+        )?;
+        builder.build_store(input_x, x.as_basic_value().into_int_value())?;
+        builder.build_store(input_y, y.as_basic_value().into_int_value())?;
+        builder.build_store(input_stack_ptr, stack_ptr.as_basic_value().into_int_value())?;
+        builder.build_store(input_flags, flags.as_basic_value().into_int_value())?;
+        builder.build_return(Some(&pc.as_basic_value()))?;
+
+        return Ok(Self {
+            block,
+            pc,
+            accumulator,
+            x,
+            y,
+            stack_ptr,
+            flags,
+        });
+    }
+
+    pub fn add_incoming(
+        &self,
+        next_pc: IntValue<'a>,
+        b: &Builder<'a, '_>,
+    ) -> Result<(), BuilderError> {
+        let flags = b.builder.build_bitcast(b.flags, b.cx.i8_type(), "")?;
+
+        self.accumulator.add_incoming(&[(&b.accumulator, b.block)]);
+        self.x.add_incoming(&[(&b.x, b.block)]);
+        self.y.add_incoming(&[(&b.y, b.block)]);
+        self.stack_ptr.add_incoming(&[(&b.stack_ptr, b.block)]);
+        self.flags.add_incoming(&[(&flags, b.block)]);
+        self.pc.add_incoming(&[(&next_pc, b.block)]);
+        return Ok(());
+    }
 }

@@ -1,3 +1,5 @@
+use std::mem;
+
 use emunes::cpu::{
     backend::llvm::Llvm,
     memory::{create_linear_memory, debug::DebugMemory, Memory},
