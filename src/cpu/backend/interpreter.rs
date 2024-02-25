@@ -365,25 +365,25 @@ impl Backend for Interpreter {
                 }
                 Instr::BCC(addr) => {
                     if !cpu.flags.contains(Flag::Carry) {
-                        tick(1 + 2 * page_crossed(pc, addr) as u8);
+                        tick(1 + page_crossed(pc, addr) as u8);
                         pc = addr;
                     }
                 }
                 Instr::BCS(addr) => {
                     if cpu.flags.contains(Flag::Carry) {
-                        tick(1 + 2 * page_crossed(pc, addr) as u8);
+                        tick(1 + page_crossed(pc, addr) as u8);
                         pc = addr;
                     }
                 }
                 Instr::BEQ(addr) => {
                     if cpu.flags.contains(Flag::Zero) {
-                        tick(1 + 2 * page_crossed(pc, addr) as u8);
+                        tick(1 + page_crossed(pc, addr) as u8);
                         pc = addr;
                     }
                 }
                 Instr::BMI(addr) => {
                     if cpu.flags.contains(Flag::Negative) {
-                        tick(1 + 2 * page_crossed(pc, addr) as u8);
+                        tick(1 + page_crossed(pc, addr) as u8);
                         pc = addr;
                     }
                 }
@@ -394,25 +394,25 @@ impl Backend for Interpreter {
                             return Ok(());
                         }
 
-                        tick(1 + 2 * page_crossed(pc, addr) as u8);
+                        tick(1 + page_crossed(pc, addr) as u8);
                         pc = addr;
                     }
                 }
                 Instr::BPL(addr) => {
                     if !cpu.flags.contains(Flag::Negative) {
-                        tick(1 + 2 * page_crossed(pc, addr) as u8);
+                        tick(1 + page_crossed(pc, addr) as u8);
                         pc = addr;
                     }
                 }
                 Instr::BVC(addr) => {
                     if !cpu.flags.contains(Flag::Overflow) {
-                        tick(1 + 2 * page_crossed(pc, addr) as u8);
+                        tick(1 + page_crossed(pc, addr) as u8);
                         pc = addr;
                     }
                 }
                 Instr::BVS(addr) => {
                     if cpu.flags.contains(Flag::Overflow) {
-                        tick(1 + 2 * page_crossed(pc, addr) as u8);
+                        tick(1 + page_crossed(pc, addr) as u8);
                         pc = addr;
                     }
                 }

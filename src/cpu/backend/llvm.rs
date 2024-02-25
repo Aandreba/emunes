@@ -1,7 +1,7 @@
 use super::Backend;
 use crate::cpu::{
     flags::{Flag, Flags},
-    instrs::{read_instruction, Addressing, Instr, Operand},
+    instrs::{page_crossed, read_instruction, Addressing, Instr, Operand},
     memory::Memory,
     RunError,
 };
@@ -13,8 +13,7 @@ use inkwell::{
     execution_engine::ExecutionEngine,
     memory_buffer::MemoryBuffer,
     module::Module,
-    passes::{PassManager, PassManagerBuilder},
-    support::LLVMString,
+    passes::PassManager,
     values::{AnyValue, FunctionValue, IntValue, PhiValue, PointerValue, StructValue, VectorValue},
     AddressSpace, IntPredicate, OptimizationLevel,
 };
@@ -34,15 +33,19 @@ pub struct Llvm<'a> {
 }
 
 impl<'a> Llvm<'a> {
-    pub fn new(cx: &'a Context) -> Result<Self, LLVMString> {
+    pub fn new(cx: &'a Context) -> Result<Self, String> {
         let ir =
             MemoryBuffer::create_from_memory_range_copy(&SKELETON[..SKELETON.len() - 1], "main");
-        let module = cx.create_module_from_ir(ir)?;
-        let ee = module.create_jit_execution_engine(OptimizationLevel::Less)?;
+        let module = cx.create_module_from_ir(ir).map_err(|x| x.to_string())?;
+        let ee = module
+            .create_jit_execution_engine(OptimizationLevel::Less)
+            .map_err(|x| x.to_string())?;
 
         for fn_value in module.get_functions() {
             if fn_value.get_first_basic_block().is_some() {
-                optimize_fn(fn_value, &module)
+                if !optimize_fn(fn_value, &module) {
+                    return Err(String::from("error validating function"));
+                }
             }
         }
 
@@ -144,11 +147,11 @@ impl<'a> Llvm<'a> {
                         Instr::ORA(_) => todo!(),
                         Instr::BIT(_) => todo!(),
                         Instr::ADC(op) => builder.adc(op),
-                        Instr::SBC(_) => todo!(),
+                        Instr::SBC(op) => builder.sbc(op),
                         Instr::CMP(_) => todo!(),
                         Instr::CPX(_) => todo!(),
                         Instr::CPY(_) => todo!(),
-                        Instr::INC(_) => todo!(),
+                        Instr::INC(addr) => builder.inc(addr),
                         Instr::INX => {
                             builder.x = builder
                                 .builder
@@ -171,7 +174,7 @@ impl<'a> Llvm<'a> {
                                 .map_err(RunError::Backend)?;
                             builder.set_nz(builder.y)
                         }
-                        Instr::DEC(_) => todo!(),
+                        Instr::DEC(addr) => builder.dec(addr),
                         Instr::DEX => {
                             builder.y = builder
                                 .builder
@@ -217,25 +220,36 @@ impl<'a> Llvm<'a> {
                                 .map_err(RunError::Backend)?;
                             break builder.cx.i16_type().const_int(addr as u64, false);
                         }
-                        Instr::RTS => todo!(),
-                        Instr::BCC(_) => todo!(),
-                        Instr::BCS(_) => todo!(),
-                        Instr::BEQ(_) => todo!(),
-                        Instr::BMI(_) => todo!(),
-                        Instr::BNE(_) => todo!(),
-                        Instr::BPL(_) => todo!(),
-                        Instr::BVC(_) => todo!(),
-                        Instr::BVS(_) => todo!(),
-                        Instr::CLC => todo!(),
-                        Instr::CLD => todo!(),
-                        Instr::CLI => todo!(),
-                        Instr::CLV => todo!(),
-                        Instr::SEC => todo!(),
-                        Instr::SED => todo!(),
-                        Instr::SEI => todo!(),
+                        Instr::RTS => break builder.rts().map_err(RunError::Backend)?,
+                        Instr::BCC(addr) => builder.branch(Flag::Carry, false, pc, addr),
+                        Instr::BCS(addr) => builder.branch(Flag::Carry, true, pc, addr),
+                        Instr::BNE(addr) => builder.branch(Flag::Zero, false, pc, addr),
+                        Instr::BEQ(addr) => builder.branch(Flag::Zero, true, pc, addr),
+                        Instr::BPL(addr) => builder.branch(Flag::Negative, false, pc, addr),
+                        Instr::BMI(addr) => builder.branch(Flag::Negative, true, pc, addr),
+                        Instr::BVC(addr) => builder.branch(Flag::Overflow, false, pc, addr),
+                        Instr::BVS(addr) => builder.branch(Flag::Overflow, true, pc, addr),
+                        Instr::CLC => builder
+                            .set_flag(Flag::Carry, builder.cx.bool_type().const_int(0, false)),
+                        Instr::CLD => builder
+                            .set_flag(Flag::Decimal, builder.cx.bool_type().const_int(0, false)),
+                        Instr::CLI => builder.set_flag(
+                            Flag::InterruptDisable,
+                            builder.cx.bool_type().const_int(0, false),
+                        ),
+                        Instr::CLV => builder
+                            .set_flag(Flag::Overflow, builder.cx.bool_type().const_int(0, false)),
+                        Instr::SEC => builder
+                            .set_flag(Flag::Carry, builder.cx.bool_type().const_int(1, false)),
+                        Instr::SED => builder
+                            .set_flag(Flag::Decimal, builder.cx.bool_type().const_int(1, false)),
+                        Instr::SEI => builder.set_flag(
+                            Flag::InterruptDisable,
+                            builder.cx.bool_type().const_int(1, false),
+                        ),
                         Instr::BRK => break builder.brk(pc).map_err(RunError::Backend)?,
                         Instr::NOP => Ok(()),
-                        Instr::RTI => todo!(),
+                        Instr::RTI => break builder.rti().map_err(RunError::Backend)?,
                         Instr::ASL(Operand::Immediate(_))
                         | Instr::LSR(Operand::Immediate(_))
                         | Instr::ROL(Operand::Immediate(_))
@@ -245,12 +259,21 @@ impl<'a> Llvm<'a> {
                 };
 
                 builder.ret(next_pc).map_err(RunError::Backend)?;
-                let fn_value = builder.fn_value;
-                optimize_fn(fn_value, &this.module);
-                #[cfg(debug_assertions)]
-                fn_value.print_to_stderr();
+                builder
+                    .common_return
+                    .block
+                    .move_after(builder.block)
+                    .unwrap();
 
-                fn_value
+                if !optimize_fn(builder.fn_value, &this.module) {
+                    builder.fn_value.print_to_stderr();
+                    return Err(RunError::Backend(BuilderError::ValueTypeMismatch(
+                        "error validating function",
+                    )));
+                }
+                #[cfg(debug_assertions)]
+                builder.fn_value.print_to_stderr();
+                builder.fn_value
             }
         };
 
@@ -618,6 +641,172 @@ impl<'a, 'b> Builder<'a, 'b> {
 
         self.tick_if_page_crossed(self.cx.i8_type().const_int(1, false), page_crossed)?;
         return Ok(());
+    }
+
+    pub fn sbc(&mut self, op: Operand) -> Result<(), BuilderError> {
+        let (op, page_crossed) = self.get_operand(op)?;
+        let carry = self.get_flag(Flag::Carry)?;
+        let decimal = self.builder.build_and(
+            self.get_flag(Flag::Decimal)?,
+            self.cx
+                .bool_type()
+                .const_int(self.decimal_enabled as u64, false),
+            "",
+        )?;
+
+        let binary_block = self.cx.append_basic_block(self.fn_value, "");
+        let decimal_block = self.cx.append_basic_block(self.fn_value, "");
+
+        self.builder
+            .build_conditional_branch(decimal, decimal_block, binary_block)?;
+
+        // Build continue block
+        let continue_block = self.cx.append_basic_block(self.fn_value, "");
+        self.builder.position_at_end(continue_block);
+        let accumulator = self.builder.build_phi(self.cx.i8_type(), "")?;
+        let next_carry = self.builder.build_phi(self.cx.bool_type(), "")?;
+        let next_overflow = self.builder.build_phi(self.cx.bool_type(), "")?;
+
+        // Build decimal block
+        self.builder.position_at_end(decimal_block);
+        let decimal_res = self
+            .builder
+            .build_call(
+                self.module.get_function("decimal_sbc").unwrap(),
+                &[self.accumulator.into(), op.into(), carry.into()],
+                "",
+            )?
+            .as_any_value_enum()
+            .into_struct_value();
+
+        accumulator.add_incoming(&[(
+            &self.builder.build_extract_value(decimal_res, 0, "")?,
+            decimal_block,
+        )]);
+
+        next_carry.add_incoming(&[(
+            &self.builder.build_extract_value(decimal_res, 1, "")?,
+            decimal_block,
+        )]);
+
+        next_overflow.add_incoming(&[(&self.get_flag(Flag::Overflow)?, decimal_block)]);
+        self.builder.build_unconditional_branch(continue_block)?;
+
+        // Build binary block
+        self.builder.position_at_end(binary_block);
+        let binary_res = self
+            .builder
+            .build_call(
+                self.module.get_function("binary_sbc").unwrap(),
+                &[self.accumulator.into(), op.into(), carry.into()],
+                "",
+            )?
+            .as_any_value_enum()
+            .into_struct_value();
+
+        accumulator.add_incoming(&[(
+            &self.builder.build_extract_value(binary_res, 0, "")?,
+            binary_block,
+        )]);
+
+        next_carry.add_incoming(&[(
+            &self.builder.build_extract_value(binary_res, 1, "")?,
+            binary_block,
+        )]);
+
+        next_overflow.add_incoming(&[(
+            &self.builder.build_extract_value(binary_res, 2, "")?,
+            binary_block,
+        )]);
+
+        self.builder.build_unconditional_branch(continue_block)?;
+
+        // Return
+        self.block = continue_block;
+        self.builder.position_at_end(continue_block);
+        self.accumulator = accumulator.as_basic_value().into_int_value();
+
+        self.set_nz(self.accumulator)?;
+        self.set_flag(Flag::Carry, next_carry.as_basic_value().into_int_value())?;
+        self.set_flag(
+            Flag::Overflow,
+            next_overflow.as_basic_value().into_int_value(),
+        )?;
+
+        self.tick_if_page_crossed(self.cx.i8_type().const_int(1, false), page_crossed)?;
+        return Ok(());
+    }
+
+    pub fn inc(&mut self, addr: Addressing) -> Result<(), BuilderError> {
+        let (addr, _) = self.get_address(addr)?;
+        let op = self.read_u8(addr)?;
+        let res = self
+            .builder
+            .build_int_add(op, self.cx.i8_type().const_int(1, false), "")?;
+
+        self.write_u8(addr, res)?;
+        self.set_nz(res)?;
+        return Ok(());
+    }
+
+    pub fn dec(&mut self, addr: Addressing) -> Result<(), BuilderError> {
+        let (addr, _) = self.get_address(addr)?;
+        let op = self.read_u8(addr)?;
+        let res = self
+            .builder
+            .build_int_sub(op, self.cx.i8_type().const_int(1, false), "")?;
+
+        self.write_u8(addr, res)?;
+        self.set_nz(res)?;
+        return Ok(());
+    }
+
+    pub fn branch(
+        &mut self,
+        flag: Flag,
+        is_set: bool,
+        pc: u16,
+        addr: u16,
+    ) -> Result<(), BuilderError> {
+        let i16_type = self.cx.i16_type();
+        let branch_block = self.cx.append_basic_block(self.fn_value, "");
+        let continue_block = self.cx.append_basic_block(self.fn_value, "");
+
+        let comparisson = self.get_flag(flag)?;
+        let (then_block, else_block) = match is_set {
+            true => (branch_block, continue_block),
+            false => (continue_block, branch_block),
+        };
+
+        self.builder
+            .build_conditional_branch(comparisson, then_block, else_block)?;
+
+        // Branch block
+        self.block = branch_block;
+        self.builder.position_at_end(branch_block);
+
+        let ticks = 1 + page_crossed(pc, addr) as u64;
+        self.tick(self.cx.i8_type().const_int(ticks, false))?;
+        self.ret(i16_type.const_int(addr as u64, false))?;
+
+        // Continue block
+        self.block = continue_block;
+        self.builder.position_at_end(continue_block);
+
+        return Ok(());
+    }
+
+    pub fn rts(&mut self) -> Result<IntValue<'a>, BuilderError> {
+        let pc = self.pop_u16()?;
+        return self
+            .builder
+            .build_int_add(pc, self.cx.i8_type().const_int(1, false), "");
+    }
+
+    pub fn rti(&mut self) -> Result<IntValue<'a>, BuilderError> {
+        let flags = self.pop()?;
+        self.int_to_flags(flags)?;
+        return self.rts();
     }
 
     pub fn brk(&mut self, pc: u16) -> Result<IntValue<'a>, BuilderError> {
@@ -1214,7 +1403,12 @@ impl<'a> CommonReturn<'a> {
     }
 }
 
-fn optimize_fn<'a>(fn_value: FunctionValue<'a>, module: &Module<'a>) {
+#[must_use]
+fn optimize_fn<'a>(fn_value: FunctionValue<'a>, module: &Module<'a>) -> bool {
+    if !fn_value.verify(true) {
+        return false;
+    }
+
     let manager = PassManager::<FunctionValue>::create(module);
     manager.add_instruction_simplify_pass();
     manager.add_instruction_combining_pass();
@@ -1230,4 +1424,5 @@ fn optimize_fn<'a>(fn_value: FunctionValue<'a>, module: &Module<'a>) {
     manager.add_aggressive_dce_pass();
     // builder.populate_function_pass_manager(&manager);
     manager.run_on(&fn_value);
+    return true;
 }
