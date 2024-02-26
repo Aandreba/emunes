@@ -533,7 +533,7 @@ impl<'a, 'b> Builder<'a, 'b> {
         let (op, page_crossed) = self.get_operand(op)?;
         self.accumulator = op;
         self.set_nz(op)?;
-        self.tick_if_page_crossed(self.cx.i8_type().const_int(1, false), page_crossed)?;
+        self.tick_one_page_crossed(page_crossed)?;
         return Ok(());
     }
 
@@ -541,7 +541,7 @@ impl<'a, 'b> Builder<'a, 'b> {
         let (op, page_crossed) = self.get_operand(op)?;
         self.x = op;
         self.set_nz(op)?;
-        self.tick_if_page_crossed(self.cx.i8_type().const_int(1, false), page_crossed)?;
+        self.tick_one_page_crossed(page_crossed)?;
         return Ok(());
     }
 
@@ -549,7 +549,7 @@ impl<'a, 'b> Builder<'a, 'b> {
         let (op, page_crossed) = self.get_operand(op)?;
         self.y = op;
         self.set_nz(op)?;
-        self.tick_if_page_crossed(self.cx.i8_type().const_int(1, false), page_crossed)?;
+        self.tick_one_page_crossed(page_crossed)?;
         return Ok(());
     }
 
@@ -643,7 +643,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             next_overflow.as_basic_value().into_int_value(),
         )?;
 
-        self.tick_if_page_crossed(self.cx.i8_type().const_int(1, false), page_crossed)?;
+        self.tick_one_page_crossed(page_crossed)?;
         return Ok(());
     }
 
@@ -737,7 +737,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             next_overflow.as_basic_value().into_int_value(),
         )?;
 
-        self.tick_if_page_crossed(self.cx.i8_type().const_int(1, false), page_crossed)?;
+        self.tick_one_page_crossed(page_crossed)?;
         return Ok(());
     }
 
@@ -762,6 +762,69 @@ impl<'a, 'b> Builder<'a, 'b> {
 
         self.write_u8(addr, res)?;
         self.set_nz(res)?;
+        return Ok(());
+    }
+
+    pub fn and(&mut self, op: Operand) -> Result<(), BuilderError> {
+        let (op, page_crossed) = self.get_operand(op)?;
+        self.accumulator = self.builder.build_and(self.accumulator, op, "")?;
+
+        self.set_nz(self.accumulator)?;
+        self.tick_one_page_crossed(page_crossed)?;
+        return Ok(());
+    }
+
+    pub fn eor(&mut self, op: Operand) -> Result<(), BuilderError> {
+        let (op, page_crossed) = self.get_operand(op)?;
+        self.accumulator = self.builder.build_xor(self.accumulator, op, "")?;
+
+        self.set_nz(self.accumulator)?;
+        self.tick_one_page_crossed(page_crossed)?;
+        return Ok(());
+    }
+
+    pub fn ora(&mut self, op: Operand) -> Result<(), BuilderError> {
+        let (op, page_crossed) = self.get_operand(op)?;
+        self.accumulator = self.builder.build_or(self.accumulator, op, "")?;
+
+        self.set_nz(self.accumulator)?;
+        self.tick_one_page_crossed(page_crossed)?;
+        return Ok(());
+    }
+
+    pub fn bit(&mut self, addr: Addressing) -> Result<(), BuilderError> {
+        let (addr, _) = self.get_address(addr)?;
+        let op = self.read_u8(addr)?;
+        let res = self.builder.build_and(self.accumulator, op, "")?;
+
+        self.set_flag(
+            Flag::Zero,
+            self.builder.build_int_compare(
+                IntPredicate::EQ,
+                res,
+                self.cx.i8_type().const_zero(),
+                "",
+            )?,
+        )?;
+
+        self.set_flag(
+            Flag::Negative,
+            self.builder.build_int_compare(
+                IntPredicate::SLT,
+                op,
+                self.cx.i8_type().const_zero(),
+                "",
+            )?,
+        )?;
+
+        let next_overflow = self.builder.build_int_compare(
+            IntPredicate::NE,
+            self.builder
+                .build_and(op, self.cx.i8_type().const_int(1 << 6, false), "")?,
+            self.cx.i8_type().const_zero(),
+            "",
+        )?;
+        self.set_flag(Flag::Overflow, next_overflow)?;
         return Ok(());
     }
 
@@ -1017,9 +1080,8 @@ impl<'a, 'b> Builder<'a, 'b> {
 
 // Memory
 impl<'a, 'b> Builder<'a, 'b> {
-    pub fn tick_if_page_crossed(
+    pub fn tick_one_page_crossed(
         &mut self,
-        ticks: IntValue<'a>,
         page_crossed: IntValue<'a>,
     ) -> Result<(), BuilderError> {
         let then_block = self.cx.append_basic_block(self.fn_value, "");
@@ -1029,7 +1091,7 @@ impl<'a, 'b> Builder<'a, 'b> {
 
         self.block = then_block;
         self.builder.position_at_end(self.block);
-        self.tick(ticks)?;
+        self.tick(self.cx.i8_type().const_int(1, false))?;
         self.builder.build_unconditional_branch(continue_block)?;
 
         self.block = continue_block;
