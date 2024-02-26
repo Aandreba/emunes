@@ -142,15 +142,15 @@ impl<'a> Llvm<'a> {
                             let flags = builder.pop().map_err(RunError::Backend)?;
                             builder.int_to_flags(flags)
                         }
-                        Instr::AND(_) => todo!(),
-                        Instr::EOR(_) => todo!(),
-                        Instr::ORA(_) => todo!(),
-                        Instr::BIT(_) => todo!(),
+                        Instr::AND(op) => builder.and(op),
+                        Instr::EOR(op) => builder.eor(op),
+                        Instr::ORA(op) => builder.ora(op),
+                        Instr::BIT(addr) => builder.bit(addr),
                         Instr::ADC(op) => builder.adc(op),
                         Instr::SBC(op) => builder.sbc(op),
-                        Instr::CMP(_) => todo!(),
-                        Instr::CPX(_) => todo!(),
-                        Instr::CPY(_) => todo!(),
+                        Instr::CMP(op) => builder.cmp(builder.accumulator, op),
+                        Instr::CPX(op) => builder.cmp(builder.x, op),
+                        Instr::CPY(op) => builder.cmp(builder.y, op),
                         Instr::INC(addr) => builder.inc(addr),
                         Instr::INX => {
                             builder.x = builder
@@ -825,6 +825,31 @@ impl<'a, 'b> Builder<'a, 'b> {
             "",
         )?;
         self.set_flag(Flag::Overflow, next_overflow)?;
+        return Ok(());
+    }
+
+    pub fn cmp(&mut self, lhs: IntValue<'a>, rhs: Operand) -> Result<(), BuilderError> {
+        let (op, page_crossed) = self.get_operand(rhs)?;
+
+        self.set_flag(
+            Flag::Carry,
+            self.builder
+                .build_int_compare(IntPredicate::UGE, lhs, op, "")?,
+        )?;
+
+        self.set_flag(
+            Flag::Zero,
+            self.builder
+                .build_int_compare(IntPredicate::EQ, lhs, op, "")?,
+        )?;
+
+        self.set_flag(
+            Flag::Negative,
+            self.builder
+                .build_int_compare(IntPredicate::ULT, lhs, op, "")?,
+        )?;
+
+        self.tick_one_page_crossed(page_crossed)?;
         return Ok(());
     }
 
