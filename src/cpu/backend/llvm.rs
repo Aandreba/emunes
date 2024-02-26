@@ -201,10 +201,10 @@ impl<'a> Llvm<'a> {
                         Instr::ASL(Operand::Addressing(addr)) => builder.asl(addr),
                         Instr::LSR(Operand::Accumulator) => builder.lsra(),
                         Instr::LSR(Operand::Addressing(addr)) => builder.lsr(addr),
-                        Instr::ROL(Operand::Accumulator) => todo!(),
-                        Instr::ROL(Operand::Addressing(addr)) => todo!(),
-                        Instr::ROR(Operand::Accumulator) => todo!(),
-                        Instr::ROR(Operand::Addressing(addr)) => todo!(),
+                        Instr::ROL(Operand::Accumulator) => builder.rola(),
+                        Instr::ROL(Operand::Addressing(addr)) => builder.rol(addr),
+                        Instr::ROR(Operand::Accumulator) => builder.rora(),
+                        Instr::ROR(Operand::Addressing(addr)) => builder.ror(addr),
                         Instr::JMP(addr) => {
                             break builder.cx.i16_type().const_int(addr as u64, false)
                         }
@@ -831,6 +831,116 @@ impl<'a, 'b> Builder<'a, 'b> {
             .build_int_truncate(op, self.cx.bool_type(), "")?;
         self.set_nz(res)?;
         self.set_flag(Flag::Carry, carry)?;
+        return Ok(());
+    }
+
+    pub fn rola(&mut self) -> Result<(), BuilderError> {
+        let prev_acc = self.accumulator;
+        let carry =
+            self.builder
+                .build_int_z_extend(self.get_flag(Flag::Carry)?, self.cx.i8_type(), "")?;
+
+        self.accumulator = self.builder.build_or(
+            self.builder
+                .build_left_shift(prev_acc, self.cx.i8_type().const_int(1, false), "")?,
+            carry,
+            "",
+        )?;
+
+        let next_carry = self.builder.build_int_compare(
+            IntPredicate::SLT,
+            prev_acc,
+            self.cx.i8_type().const_zero(),
+            "",
+        )?;
+        self.set_nz(self.accumulator)?;
+        self.set_flag(Flag::Carry, next_carry)?;
+        return Ok(());
+    }
+
+    pub fn rol(&mut self, addr: Addressing) -> Result<(), BuilderError> {
+        let (addr, _) = self.get_address(addr)?;
+        let op = self.read_u8(addr)?;
+        let carry =
+            self.builder
+                .build_int_z_extend(self.get_flag(Flag::Carry)?, self.cx.i8_type(), "")?;
+
+        let res = self.builder.build_or(
+            self.builder
+                .build_left_shift(op, self.cx.i8_type().const_int(1, false), "")?,
+            carry,
+            "",
+        )?;
+        self.write_u8(addr, res)?;
+
+        let next_carry = self.builder.build_int_compare(
+            IntPredicate::SLT,
+            op,
+            self.cx.i8_type().const_zero(),
+            "",
+        )?;
+        self.set_nz(res)?;
+        self.set_flag(Flag::Carry, next_carry)?;
+        return Ok(());
+    }
+
+    pub fn rora(&mut self) -> Result<(), BuilderError> {
+        let prev_acc = self.accumulator;
+        let carry = self
+            .builder
+            .build_select(
+                self.get_flag(Flag::Carry)?,
+                self.cx.i8_type().const_int(1 << 7, false),
+                self.cx.i8_type().const_zero(),
+                "",
+            )?
+            .into_int_value();
+
+        self.accumulator = self.builder.build_or(
+            self.builder.build_right_shift(
+                prev_acc,
+                self.cx.i8_type().const_int(1, false),
+                false,
+                "",
+            )?,
+            carry,
+            "",
+        )?;
+
+        let next_carry = self
+            .builder
+            .build_int_truncate(prev_acc, self.cx.bool_type(), "")?;
+        self.set_nz(self.accumulator)?;
+        self.set_flag(Flag::Carry, next_carry)?;
+        return Ok(());
+    }
+
+    pub fn ror(&mut self, addr: Addressing) -> Result<(), BuilderError> {
+        let (addr, _) = self.get_address(addr)?;
+        let op = self.read_u8(addr)?;
+        let carry = self
+            .builder
+            .build_select(
+                self.get_flag(Flag::Carry)?,
+                self.cx.i8_type().const_int(1 << 7, false),
+                self.cx.i8_type().const_zero(),
+                "",
+            )?
+            .into_int_value();
+
+        let res = self.builder.build_or(
+            self.builder
+                .build_right_shift(op, self.cx.i8_type().const_int(1, false), false, "")?,
+            carry,
+            "",
+        )?;
+        self.write_u8(addr, res)?;
+
+        let next_carry = self
+            .builder
+            .build_int_truncate(op, self.cx.bool_type(), "")?;
+        self.set_nz(res)?;
+        self.set_flag(Flag::Carry, next_carry)?;
         return Ok(());
     }
 
