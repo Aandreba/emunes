@@ -67,7 +67,7 @@ impl<'a> Llvm<'a> {
         tick: impl FnMut(u8),
     ) -> Result<u16, RunError<M, Self>> {
         let this = &mut cpu.backend;
-        let input_pc = pc;
+        let initial_pc = pc;
 
         let fn_value = match this.compiled.entry(pc) {
             Entry::Occupied(entry) => *entry.into_mut(),
@@ -197,10 +197,14 @@ impl<'a> Llvm<'a> {
                                 .map_err(RunError::Backend)?;
                             builder.set_nz(builder.y)
                         }
-                        Instr::ASL(_) => todo!(),
-                        Instr::LSR(_) => todo!(),
-                        Instr::ROL(_) => todo!(),
-                        Instr::ROR(_) => todo!(),
+                        Instr::ASL(Operand::Accumulator) => builder.asla(),
+                        Instr::ASL(Operand::Addressing(addr)) => builder.asl(addr),
+                        Instr::LSR(Operand::Accumulator) => builder.lsra(),
+                        Instr::LSR(Operand::Addressing(addr)) => builder.lsr(addr),
+                        Instr::ROL(Operand::Accumulator) => todo!(),
+                        Instr::ROL(Operand::Addressing(addr)) => todo!(),
+                        Instr::ROR(Operand::Accumulator) => todo!(),
+                        Instr::ROR(Operand::Addressing(addr)) => todo!(),
                         Instr::JMP(addr) => {
                             break builder.cx.i16_type().const_int(addr as u64, false)
                         }
@@ -291,7 +295,7 @@ impl<'a> Llvm<'a> {
                     *mut u8,
                     *mut Flags,
                     UserData,
-                ) -> u16>(&input_pc.to_string())
+                ) -> u16>(&initial_pc.to_string())
                 .unwrap();
 
             let res = f.call(
@@ -758,6 +762,75 @@ impl<'a, 'b> Builder<'a, 'b> {
 
         self.write_u8(addr, res)?;
         self.set_nz(res)?;
+        return Ok(());
+    }
+
+    pub fn asla(&mut self) -> Result<(), BuilderError> {
+        let prev_acc = self.accumulator;
+        self.accumulator =
+            self.builder
+                .build_left_shift(prev_acc, self.cx.i8_type().const_int(1, false), "")?;
+
+        let carry = self.builder.build_int_compare(
+            IntPredicate::SLT,
+            prev_acc,
+            self.cx.i8_type().const_zero(),
+            "",
+        )?;
+        self.set_nz(self.accumulator)?;
+        self.set_flag(Flag::Carry, carry)?;
+        return Ok(());
+    }
+
+    pub fn asl(&mut self, addr: Addressing) -> Result<(), BuilderError> {
+        let (addr, _) = self.get_address(addr)?;
+        let op = self.read_u8(addr)?;
+        let res = self
+            .builder
+            .build_left_shift(op, self.cx.i8_type().const_int(1, false), "")?;
+        self.write_u8(addr, res)?;
+
+        let carry = self.builder.build_int_compare(
+            IntPredicate::SLT,
+            op,
+            self.cx.i8_type().const_zero(),
+            "",
+        )?;
+        self.set_nz(res)?;
+        self.set_flag(Flag::Carry, carry)?;
+        return Ok(());
+    }
+
+    pub fn lsra(&mut self) -> Result<(), BuilderError> {
+        let prev_acc = self.accumulator;
+        self.accumulator = self.builder.build_right_shift(
+            prev_acc,
+            self.cx.i8_type().const_int(1, false),
+            false,
+            "",
+        )?;
+
+        let carry = self
+            .builder
+            .build_int_truncate(prev_acc, self.cx.bool_type(), "")?;
+        self.set_nz(self.accumulator)?;
+        self.set_flag(Flag::Carry, carry)?;
+        return Ok(());
+    }
+
+    pub fn lsr(&mut self, addr: Addressing) -> Result<(), BuilderError> {
+        let (addr, _) = self.get_address(addr)?;
+        let op = self.read_u8(addr)?;
+        let res =
+            self.builder
+                .build_right_shift(op, self.cx.i8_type().const_int(1, false), false, "")?;
+        self.write_u8(addr, res)?;
+
+        let carry = self
+            .builder
+            .build_int_truncate(op, self.cx.bool_type(), "")?;
+        self.set_nz(res)?;
+        self.set_flag(Flag::Carry, carry)?;
         return Ok(());
     }
 

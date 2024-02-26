@@ -56,7 +56,7 @@ fn basic_adc() {
 
 #[test]
 fn basic_adc_branch() {
-    let code = [0x69, 0xc0, 0x90, -2i8 as u8, 0xaa, 0xe8, 0x00];
+    let code = [0x69, 0xc0, 0x90, -3i8 as u8, 0xaa, 0xe8, 0x00];
 
     let h = flexi_logger::Logger::try_with_str("trace")
         .unwrap()
