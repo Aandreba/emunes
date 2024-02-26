@@ -21,6 +21,7 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     ffi::c_void,
     marker::PhantomData,
+    ops::RangeInclusive,
 };
 
 const SKELETON: &[u8] = include_bytes!("../../../skeleton.ll");
@@ -63,8 +64,8 @@ impl<'a> Llvm<'a> {
 
     fn _run<M: crate::cpu::memory::Memory>(
         cpu: &mut crate::cpu::Cpu<M, Self>,
+        user_data: UserData,
         mut pc: u16,
-        tick: impl FnMut(u8),
     ) -> Result<u16, RunError<M, Self>> {
         let this = &mut cpu.backend;
         let initial_pc = pc;
@@ -262,6 +263,9 @@ impl<'a> Llvm<'a> {
                     .map_err(RunError::Backend)?;
                 };
 
+                builder
+                    .tick(builder.cx.i8_type().const_int(prev_cycles, false))
+                    .map_err(RunError::Backend)?;
                 builder.ret(next_pc).map_err(RunError::Backend)?;
                 builder
                     .common_return
@@ -281,10 +285,6 @@ impl<'a> Llvm<'a> {
             }
         };
 
-        // Add tick mapping
-        let mut fns = ExecFns::new(&mut cpu.memory, tick);
-        let user_data = fns.setup(&this.module, &this.ee);
-
         unsafe {
             let f = this
                 .ee
@@ -298,20 +298,14 @@ impl<'a> Llvm<'a> {
                 ) -> u16>(&initial_pc.to_string())
                 .unwrap();
 
-            let res = f.call(
+            return Ok(f.call(
                 &mut cpu.accumulator,
                 &mut cpu.x,
                 &mut cpu.y,
                 &mut cpu.stack_ptr,
                 &mut cpu.flags,
                 user_data,
-            );
-
-            if let Some(e) = fns.take_last_error() {
-                return Err(RunError::Memory(e));
-            } else {
-                return Ok(res);
-            }
+            ));
         }
     }
 }
@@ -321,11 +315,23 @@ impl<'a> Backend for Llvm<'a> {
 
     fn run<M: crate::cpu::memory::Memory>(
         cpu: &mut crate::cpu::Cpu<M, Self>,
-        pc: u16,
+        mut pc: u16,
         tick: impl FnMut(u8),
     ) -> Result<(), RunError<M, Self>> {
-        let res = Self::_run(cpu, pc, tick)?;
-        println!("{res}");
+        let this = &mut cpu.backend;
+
+        // Set up executor
+        let mut fns = ExecFns::new(&mut cpu.memory, tick);
+        let user_data = fns.setup(&this.module, &this.ee);
+
+        // Run program
+        loop {
+            pc = Self::_run(cpu, user_data, pc)?;
+            if let Some(e) = fns.user_data.last_error.take() {
+                return Err(RunError::Memory(e));
+            }
+        }
+
         return Ok(());
     }
 }
@@ -1475,6 +1481,7 @@ mod tests {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
 struct UserData {
     pub tick: *mut c_void,
     pub read_u8: *mut c_void,
@@ -1495,7 +1502,7 @@ struct ExecFns<'a, M: Memory> {
     pub write_u8: unsafe extern "C" fn(u16, u8, *mut c_void) -> i8,
     pub write_u16: unsafe extern "C" fn(u16, u16, *mut c_void) -> i8,
     pub user_data: Box<ExecInner<'a, M>>,
-    _phtm: PhantomData<&'a mut &'a ()>,
+    _phtm: PhantomData<&'a mut M>,
 }
 
 impl<'a, M: Memory> ExecFns<'a, M> {
@@ -1560,10 +1567,6 @@ impl<'a, M: Memory> ExecFns<'a, M> {
             }),
             _phtm: PhantomData,
         };
-    }
-
-    pub fn take_last_error(&mut self) -> Option<M::Error> {
-        return self.user_data.last_error.take();
     }
 
     pub fn setup<'cx>(&self, module: &Module<'cx>, ee: &ExecutionEngine<'cx>) -> UserData {
@@ -1695,4 +1698,8 @@ fn optimize_fn<'a>(fn_value: FunctionValue<'a>, module: &Module<'a>) -> bool {
     // builder.populate_function_pass_manager(&manager);
     manager.run_on(&fn_value);
     return true;
+}
+
+struct Compiled {
+    range: RangeInclusive<u16>,
 }
