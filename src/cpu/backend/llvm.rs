@@ -12,22 +12,26 @@ use inkwell::{
     context::Context,
     execution_engine::ExecutionEngine,
     memory_buffer::MemoryBuffer,
-    module::Module,
+    module::{Linkage, Module},
     passes::PassManager,
+    targets::{InitializationConfig, Target},
     values::{AnyValue, FunctionValue, IntValue, PhiValue, PointerValue, StructValue, VectorValue},
     AddressSpace, IntPredicate, OptimizationLevel,
 };
 use std::{
     collections::{hash_map::Entry, HashMap},
     ffi::c_void,
-    marker::PhantomData,
     ops::RangeInclusive,
+    time::Duration,
 };
 
+pub mod ee;
+
 const SKELETON: &[u8] = include_bytes!("../../../skeleton.ll");
+type JitFn = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8, *mut Flags, UserData) -> u16;
 
 pub struct Llvm<'a> {
-    compiled: HashMap<u16, FunctionValue<'a>>,
+    compiled: HashMap<u16, Box<str>>,
     ee: ExecutionEngine<'a>,
     module: Module<'a>,
     cx: &'a Context,
@@ -35,11 +39,13 @@ pub struct Llvm<'a> {
 
 impl<'a> Llvm<'a> {
     pub fn new(cx: &'a Context) -> Result<Self, String> {
+        Target::initialize_all(&InitializationConfig::default());
+
         let ir =
             MemoryBuffer::create_from_memory_range_copy(&SKELETON[..SKELETON.len() - 1], "main");
         let module = cx.create_module_from_ir(ir).map_err(|x| x.to_string())?;
         let ee = module
-            .create_jit_execution_engine(OptimizationLevel::Less)
+            .create_jit_execution_engine(OptimizationLevel::None)
             .map_err(|x| x.to_string())?;
 
         for fn_value in module.get_functions() {
@@ -63,27 +69,36 @@ impl<'a> Llvm<'a> {
     }
 
     fn _run<M: crate::cpu::memory::Memory>(
-        cpu: &mut crate::cpu::Cpu<M, Self>,
+        &mut self,
+        decimal_enabled: bool,
+        accumulator: &mut u8,
+        x: &mut u8,
+        y: &mut u8,
+        stack_ptr: &mut u8,
+        flags: &mut Flags,
+        fns: &ExecFns<M>,
         user_data: UserData,
         mut pc: u16,
     ) -> Result<u16, RunError<M, Self>> {
-        let this = &mut cpu.backend;
         let initial_pc = pc;
 
-        let fn_value = match this.compiled.entry(pc) {
-            Entry::Occupied(entry) => *entry.into_mut(),
-            Entry::Vacant(_) => {
-                let mut builder = Builder::new(pc, cpu.decimal_enabled, &this.module, this.cx)
+        let fn_name = match self.compiled.entry(pc) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let mut builder = Builder::new(pc, decimal_enabled, &self.module, self.cx)
                     .map_err(RunError::Backend)?;
                 let mut prev_cycles = 0;
 
                 let next_pc = loop {
                     let prev_pc = pc;
-                    builder
-                        .tick(builder.cx.i8_type().const_int(prev_cycles, false))
-                        .map_err(RunError::Backend)?;
 
-                    let instr = read_instruction(&cpu.memory, &mut pc)
+                    if prev_cycles > 0 {
+                        builder
+                            .tick(builder.cx.i8_type().const_int(prev_cycles, false))
+                            .map_err(RunError::Backend)?;
+                    }
+
+                    let instr = read_instruction(&fns.user_data.memory, &mut pc)
                         .map_err(RunError::Memory)?
                         .expect("unknown instruction opcode");
 
@@ -273,39 +288,31 @@ impl<'a> Llvm<'a> {
                     .move_after(builder.block)
                     .unwrap();
 
-                if !optimize_fn(builder.fn_value, &this.module) {
+                if !optimize_fn(builder.fn_value, &self.module) {
                     builder.fn_value.print_to_stderr();
                     return Err(RunError::Backend(BuilderError::ValueTypeMismatch(
                         "error validating function",
                     )));
                 }
+
                 #[cfg(debug_assertions)]
                 builder.fn_value.print_to_stderr();
-                builder.fn_value
+                entry.insert(
+                    builder
+                        .fn_value
+                        .get_name()
+                        .to_string_lossy()
+                        .into_owned()
+                        .into_boxed_str(),
+                )
             }
         };
 
         unsafe {
-            let f = this
-                .ee
-                .get_function::<unsafe extern "C" fn(
-                    *mut u8,
-                    *mut u8,
-                    *mut u8,
-                    *mut u8,
-                    *mut Flags,
-                    UserData,
-                ) -> u16>(&initial_pc.to_string())
-                .unwrap();
-
-            return Ok(f.call(
-                &mut cpu.accumulator,
-                &mut cpu.x,
-                &mut cpu.y,
-                &mut cpu.stack_ptr,
-                &mut cpu.flags,
-                user_data,
-            ));
+            println!("{initial_pc} as \"{fn_name}\"");
+            std::thread::sleep(Duration::from_secs(1));
+            let f = self.ee.get_function::<JitFn>(&fn_name).unwrap();
+            return Ok(f.call(accumulator, x, y, stack_ptr, flags, user_data));
         }
     }
 }
@@ -326,13 +333,22 @@ impl<'a> Backend for Llvm<'a> {
 
         // Run program
         loop {
-            pc = Self::_run(cpu, user_data, pc)?;
+            pc = this._run(
+                cpu.decimal_enabled,
+                &mut cpu.accumulator,
+                &mut cpu.x,
+                &mut cpu.y,
+                &mut cpu.stack_ptr,
+                &mut cpu.flags,
+                &fns,
+                user_data,
+                pc,
+            )?;
+
             if let Some(e) = fns.user_data.last_error.take() {
                 return Err(RunError::Memory(e));
             }
         }
-
-        return Ok(());
     }
 }
 
@@ -375,7 +391,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             ],
             false,
         );
-        let fn_value = module.add_function(&pc.to_string(), fn_type, None);
+        let fn_value = module.add_function(&pc.to_string(), fn_type, Some(Linkage::External));
 
         let builder = cx.create_builder();
         let block = cx.append_basic_block(fn_value, "entry");
@@ -397,20 +413,22 @@ impl<'a, 'b> Builder<'a, 'b> {
             cx,
         )?;
 
+        input_accumulator.set_name("accumulator");
+        input_x.set_name("x");
+        input_y.set_name("y");
+        input_stack_ptr.set_name("stack_ptr");
+        input_flags.set_name("flags");
+
         return Ok(Self {
-            accumulator: builder
-                .build_load(input_accumulator, "accumulator")?
-                .into_int_value(),
-            x: builder.build_load(input_x, "x")?.into_int_value(),
-            y: builder.build_load(input_y, "y")?.into_int_value(),
-            stack_ptr: builder
-                .build_load(input_stack_ptr, "stack_ptr")?
-                .into_int_value(),
+            accumulator: builder.build_load(input_accumulator, "")?.into_int_value(),
+            x: builder.build_load(input_x, "")?.into_int_value(),
+            y: builder.build_load(input_y, "")?.into_int_value(),
+            stack_ptr: builder.build_load(input_stack_ptr, "")?.into_int_value(),
             flags: builder
                 .build_bitcast(
                     builder.build_load(input_flags, "")?.into_int_value(),
                     cx.bool_type().vec_type(8),
-                    "flags",
+                    "",
                 )?
                 .into_vector_value(),
             decimal_enabled,
@@ -1502,7 +1520,6 @@ struct ExecFns<'a, M: Memory> {
     pub write_u8: unsafe extern "C" fn(u16, u8, *mut c_void) -> i8,
     pub write_u16: unsafe extern "C" fn(u16, u16, *mut c_void) -> i8,
     pub user_data: Box<ExecInner<'a, M>>,
-    _phtm: PhantomData<&'a mut M>,
 }
 
 impl<'a, M: Memory> ExecFns<'a, M> {
@@ -1565,7 +1582,6 @@ impl<'a, M: Memory> ExecFns<'a, M> {
                 last_error: None,
                 memory,
             }),
-            _phtm: PhantomData,
         };
     }
 
