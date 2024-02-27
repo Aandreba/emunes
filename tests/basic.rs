@@ -23,8 +23,6 @@ fn basic() {
     let mut cpu = Cpu::new(memory, Llvm::new(&cx).unwrap());
     cpu.run(0x00, |_| {}).unwrap();
 
-    cpu.backend.print_to_stderr();
-
     h.flush();
     drop(h);
 }
@@ -48,7 +46,6 @@ fn basic_adc() {
     cpu.disable_decimal_mode();
 
     cpu.run(0x00, |_| {}).unwrap();
-    cpu.backend.print_to_stderr();
 
     h.flush();
     drop(h);
@@ -73,7 +70,6 @@ fn basic_adc_branch() {
     cpu.disable_decimal_mode();
 
     cpu.run(0x00, |_| {}).unwrap();
-    cpu.backend.print_to_stderr();
 
     h.flush();
     drop(h);

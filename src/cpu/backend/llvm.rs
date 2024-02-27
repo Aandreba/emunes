@@ -25,8 +25,6 @@ use std::{
     time::Duration,
 };
 
-pub mod ee;
-
 const SKELETON: &[u8] = include_bytes!("../../../skeleton.ll");
 type JitFn = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8, *mut Flags, UserData) -> u16;
 
@@ -64,10 +62,6 @@ impl<'a> Llvm<'a> {
         });
     }
 
-    pub fn print_to_stderr(&self) {
-        self.module.print_to_stderr();
-    }
-
     fn _run<M: crate::cpu::memory::Memory>(
         &mut self,
         decimal_enabled: bool,
@@ -85,8 +79,8 @@ impl<'a> Llvm<'a> {
         let fn_name = match self.compiled.entry(pc) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
-                let mut builder = Builder::new(pc, decimal_enabled, &self.module, self.cx)
-                    .map_err(RunError::Backend)?;
+                let mut builder =
+                    Builder::new(pc, decimal_enabled, self.cx).map_err(RunError::Backend)?;
                 let mut prev_cycles = 0;
 
                 let next_pc = loop {
@@ -192,15 +186,15 @@ impl<'a> Llvm<'a> {
                         }
                         Instr::DEC(addr) => builder.dec(addr),
                         Instr::DEX => {
-                            builder.y = builder
+                            builder.x = builder
                                 .builder
                                 .build_int_sub(
-                                    builder.y,
+                                    builder.x,
                                     builder.cx.i8_type().const_int(1, false),
                                     "",
                                 )
                                 .map_err(RunError::Backend)?;
-                            builder.set_nz(builder.y)
+                            builder.set_nz(builder.x)
                         }
                         Instr::DEY => {
                             builder.y = builder
@@ -288,7 +282,7 @@ impl<'a> Llvm<'a> {
                     .move_after(builder.block)
                     .unwrap();
 
-                if !optimize_fn(builder.fn_value, &self.module) {
+                if !optimize_fn(builder.fn_value, &builder.module) {
                     builder.fn_value.print_to_stderr();
                     return Err(RunError::Backend(BuilderError::ValueTypeMismatch(
                         "error validating function",
@@ -297,6 +291,8 @@ impl<'a> Llvm<'a> {
 
                 #[cfg(debug_assertions)]
                 builder.fn_value.print_to_stderr();
+                self.ee.add_module(&builder.module).unwrap();
+
                 entry.insert(
                     builder
                         .fn_value
@@ -309,8 +305,7 @@ impl<'a> Llvm<'a> {
         };
 
         unsafe {
-            println!("{initial_pc} as \"{fn_name}\"");
-            std::thread::sleep(Duration::from_secs(1));
+            println!("0x{initial_pc:04X} as \"{fn_name}\"");
             let f = self.ee.get_function::<JitFn>(&fn_name).unwrap();
             return Ok(f.call(accumulator, x, y, stack_ptr, flags, user_data));
         }
@@ -333,7 +328,7 @@ impl<'a> Backend for Llvm<'a> {
 
         // Run program
         loop {
-            pc = this._run(
+            let next_pc = this._run(
                 cpu.decimal_enabled,
                 &mut cpu.accumulator,
                 &mut cpu.x,
@@ -348,11 +343,17 @@ impl<'a> Backend for Llvm<'a> {
             if let Some(e) = fns.user_data.last_error.take() {
                 return Err(RunError::Memory(e));
             }
+
+            #[cfg(debug_assertions)]
+            if pc == next_pc {
+                return Ok(());
+            }
+            pc = next_pc;
         }
     }
 }
 
-pub struct Builder<'a, 'b> {
+pub struct Builder<'a> {
     // Cpu
     accumulator: IntValue<'a>,
     x: IntValue<'a>,
@@ -365,18 +366,17 @@ pub struct Builder<'a, 'b> {
     common_return: CommonReturn<'a>,
     builder: inkwell::builder::Builder<'a>,
     block: BasicBlock<'a>,
-    module: &'b Module<'a>,
+    module: Module<'a>,
     decimal_enabled: bool,
     cx: &'a Context,
 }
 
-impl<'a, 'b> Builder<'a, 'b> {
-    pub fn new(
-        pc: u16,
-        decimal_enabled: bool,
-        module: &'b Module<'a>,
-        cx: &'a Context,
-    ) -> Result<Self, BuilderError> {
+impl<'a> Builder<'a> {
+    pub fn new(pc: u16, decimal_enabled: bool, cx: &'a Context) -> Result<Self, BuilderError> {
+        let ir =
+            MemoryBuffer::create_from_memory_range_copy(&SKELETON[..SKELETON.len() - 1], "main");
+        let module = cx.create_module_from_ir(ir).unwrap();
+
         let i8_ptr = cx.i8_type().ptr_type(AddressSpace::default());
         let user_data = module.get_struct_type("UserData").unwrap();
 
@@ -552,7 +552,7 @@ impl<'a, 'b> Builder<'a, 'b> {
 }
 
 // Instrs
-impl<'a, 'b> Builder<'a, 'b> {
+impl<'a> Builder<'a> {
     pub fn lda(&mut self, op: Operand) -> Result<(), BuilderError> {
         let (op, page_crossed) = self.get_operand(op)?;
         self.accumulator = op;
@@ -1128,7 +1128,7 @@ impl<'a, 'b> Builder<'a, 'b> {
 }
 
 // Memory
-impl<'a, 'b> Builder<'a, 'b> {
+impl<'a> Builder<'a> {
     pub fn tick_one_page_crossed(
         &mut self,
         page_crossed: IntValue<'a>,
@@ -1287,7 +1287,7 @@ impl<'a, 'b> Builder<'a, 'b> {
 }
 
 // Stack
-impl<'a, 'b> Builder<'a, 'b> {
+impl<'a> Builder<'a> {
     pub fn push(&mut self, value: IntValue<'a>) -> Result<(), BuilderError> {
         let addr = self.stack_addr()?;
         self.write_u8(addr, value)?;
@@ -1335,7 +1335,7 @@ impl<'a, 'b> Builder<'a, 'b> {
 }
 
 // Flags
-impl<'a, 'b> Builder<'a, 'b> {
+impl<'a> Builder<'a> {
     pub fn flags_to_int(&self, from_interrupt: bool) -> Result<IntValue<'a>, BuilderError> {
         let bool_type = self.cx.bool_type();
         let i8_type = self.cx.i8_type();
@@ -1427,7 +1427,7 @@ impl<'a, 'b> Builder<'a, 'b> {
 }
 
 // Misc
-impl<'a, 'b> Builder<'a, 'b> {
+impl<'a> Builder<'a> {
     pub fn to_le_bytes(&self, value: IntValue<'a>) -> Result<[IntValue<'a>; 2], BuilderError> {
         let vector = self
             .builder
@@ -1494,7 +1494,6 @@ mod tests {
     fn init() {
         let cx = Context::create();
         let llvm = Llvm::new(&cx).unwrap();
-        llvm.print_to_stderr();
     }
 }
 
@@ -1675,11 +1674,7 @@ impl<'a> CommonReturn<'a> {
         });
     }
 
-    pub fn add_incoming(
-        &self,
-        next_pc: IntValue<'a>,
-        b: &Builder<'a, '_>,
-    ) -> Result<(), BuilderError> {
+    pub fn add_incoming(&self, next_pc: IntValue<'a>, b: &Builder<'a>) -> Result<(), BuilderError> {
         let flags = b.builder.build_bitcast(b.flags, b.cx.i8_type(), "")?;
 
         self.accumulator.add_incoming(&[(&b.accumulator, b.block)]);
