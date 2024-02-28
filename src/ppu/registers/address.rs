@@ -12,6 +12,10 @@ impl Address {
         self.0 = self.0.wrapping_add(delta)
     }
 
+    pub fn reset_latch(&mut self) {
+        self.0 |= 0xff00
+    }
+
     pub const fn into_inner(self) -> u16 {
         return self.0 % 0x4000;
     }

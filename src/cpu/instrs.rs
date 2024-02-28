@@ -188,8 +188,8 @@ impl Operand {
 }
 
 // http://www.6502.org/users/obelisk/6502/reference.html
-pub fn read_instruction<M: Memory>(this: &M, pc: &mut u16) -> Result<Option<Instr>, M::Error> {
-    struct Reader<'a, M>(&'a M, &'a mut u16);
+pub fn read_instruction<M: Memory>(this: &mut M, pc: &mut u16) -> Result<Option<Instr>, M::Error> {
+    struct Reader<'a, M>(&'a mut M, &'a mut u16);
 
     impl<'a, M: Memory> Reader<'a, M> {
         pub fn next_u8(&mut self) -> Result<u8, M::Error> {

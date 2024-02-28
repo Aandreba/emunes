@@ -101,7 +101,7 @@ impl<M: Memory, B: Backend> Cpu<M, B> {
 // Operand ops
 impl<M: Memory, B: Backend> Cpu<M, B> {
     #[track_caller]
-    pub fn get_operand(&self, op: Operand) -> Result<(u8, bool), RunError<M, B>> {
+    pub fn get_operand(&mut self, op: Operand) -> Result<(u8, bool), RunError<M, B>> {
         return Ok(match op {
             Operand::Accumulator => (self.accumulator, false),
             Operand::Immediate(val) => (val, false),
@@ -116,7 +116,7 @@ impl<M: Memory, B: Backend> Cpu<M, B> {
     }
 
     #[track_caller]
-    pub fn get_addressing(&self, addr: Addressing) -> Result<(u16, bool), RunError<M, B>> {
+    pub fn get_addressing(&mut self, addr: Addressing) -> Result<(u16, bool), RunError<M, B>> {
         return Ok(match addr {
             Addressing::ZeroPage(addr) => (addr as u16, false),
             Addressing::ZeroPageX(base) => (base.wrapping_add(self.x) as u16, false),

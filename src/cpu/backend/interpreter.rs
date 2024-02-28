@@ -25,7 +25,7 @@ impl Backend for Interpreter {
             let prev_pc = pc;
             tick(&mut cpu.memory, prev_cycles);
 
-            let instr = read_instruction(&cpu.memory, &mut pc)
+            let instr = read_instruction(&mut cpu.memory, &mut pc)
                 .map_err(RunError::Memory)?
                 .expect(&format!("unknown instruction found at 0x{prev_pc:04X}"));
 
@@ -131,10 +131,8 @@ impl Backend for Interpreter {
                     }
                 }
                 Instr::BIT(addr) => {
-                    let op = cpu
-                        .memory
-                        .read_u8(cpu.get_addressing(addr)?.0)
-                        .map_err(RunError::Memory)?;
+                    let (addr, _) = cpu.get_addressing(addr)?;
+                    let op = cpu.memory.read_u8(addr).map_err(RunError::Memory)?;
                     cpu.flags.set(Flag::Zero, (cpu.accumulator & op) == 0);
                     cpu.flags.set(Flag::Negative, (op as i8).is_negative());
                     cpu.flags.set(Flag::Overflow, (op >> 6) & 1 == 1);

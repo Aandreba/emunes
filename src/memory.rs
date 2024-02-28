@@ -1,8 +1,8 @@
 use crate::{cartridge::Cartridge, cpu::memory::Memory, ppu::Ppu};
 
 pub struct NesMemory {
-    ram: Box<[u8; 0x800]>,
-    ppu: Ppu,
+    pub ram: Box<[u8; 0x800]>,
+    pub ppu: Ppu,
 }
 
 impl NesMemory {

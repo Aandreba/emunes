@@ -11,6 +11,6 @@ pub trait Backend: Sized {
     fn run<M: Memory>(
         cpu: &mut Cpu<M, Self>,
         pc: u16,
-        tick: impl FnMut(&mut M, u8),
+        tick: impl FnMut(&mut Cpu<M, Self>, u8),
     ) -> Result<(), RunError<M, Self>>;
 }

@@ -1,5 +1,3 @@
-#![feature(bigint_helper_methods)]
-
 use cartridge::Cartridge;
 use cpu::{backend::interpreter::Interpreter, Cpu};
 use memory::NesMemory;
@@ -22,6 +20,6 @@ impl Nes {
     }
 
     pub fn run(&mut self) {
-        self.cpu.restart(todo!());
+        self.cpu.restart(|mem, cycles| todo!());
     }
 }

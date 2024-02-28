@@ -50,7 +50,8 @@ impl Ppu {
 
 impl Ppu {
     pub fn read_status(&mut self) -> u8 {
-        let res = self.status.into_inner() | 0;
+        let res = self.status.read() | (self.last_write & 0b11111);
+        // TODO scroll latch reset
         return res;
     }
 
