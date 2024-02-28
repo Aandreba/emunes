@@ -51,8 +51,8 @@ impl Ppu {
             self.current_scanline += 1;
 
             if self.current_scanline == 241 {
-                if true || self.controller.vbi_nmi_enabled() {
-                    self.status.set_vblank_started(true);
+                self.status.set_vblank_started(true);
+                if self.controller.vbi_nmi_enabled() {
                     *nmi_interrupt = true;
                 }
             }

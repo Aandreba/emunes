@@ -7,7 +7,10 @@ use std::{
 };
 
 pub fn main() {
-    simple_logger::SimpleLogger::new().init().unwrap();
+    simple_logger::SimpleLogger::new()
+        .with_level(log::LevelFilter::Off)
+        .init()
+        .unwrap();
 
     block_on(async move {
         let pacman = std::fs::read("Pac-Man (USA) (Namco).nes").unwrap();

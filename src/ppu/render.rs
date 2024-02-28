@@ -6,14 +6,6 @@ use super::{
 };
 use crate::video::{palette::Palette, Video};
 
-#[derive(Debug, Clone, Default)]
-pub(super) struct ScanlineData {
-    pub nametable: u8,
-    pub attribute: u8,
-    pub pattern_table_lo: u8,
-    pub pattern_table_hi: u8,
-}
-
 impl Ppu {
     pub fn render(&mut self, video: &mut Video, colors: &Palette) {
         self.render_background(video, colors)
@@ -41,8 +33,8 @@ impl Ppu {
                     .palette
                     .get_background_palette(palette_idx, colors);
 
-                for x in 0..8 {
-                    for y in 0..8 {
+                for y in 0..8 {
+                    for x in (0..8).rev() {
                         let color = match tile.get_pixel(x, y).unwrap() {
                             u2::Zero => self.memory.palette.get_ubc(colors),
                             u2::One => palette[0],
