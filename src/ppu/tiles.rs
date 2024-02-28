@@ -1,13 +1,18 @@
-use std::{hint::unreachable_unchecked, mem::size_of, ops::Deref};
+use std::{
+    hint::unreachable_unchecked,
+    mem::size_of,
+    ops::{Deref, DerefMut},
+};
 
 const CHR_SIZE: usize = 8 << 10;
 const TILE_COUNT: usize = CHR_SIZE / size_of::<Tile>();
 
-pub struct Chr {
+#[derive(Debug, Clone)]
+pub struct PatternTable {
     data: Box<[Tile; TILE_COUNT]>,
 }
 
-impl Chr {
+impl PatternTable {
     pub fn new(chr_rom: Vec<u8>) -> Option<Self> {
         let chr_rom = chr_rom.into_boxed_slice();
         if chr_rom.len() != CHR_SIZE {
@@ -26,13 +31,25 @@ impl Chr {
         };
     }
 
+    #[inline]
+    pub fn as_mut_bytes(&mut self) -> &mut [u8; CHR_SIZE] {
+        return unsafe {
+            &mut *(self.as_mut_tiles() as *mut [Tile; TILE_COUNT] as *mut [u8; CHR_SIZE])
+        };
+    }
+
     #[inline(always)]
     pub fn as_tiles(&self) -> &[Tile; TILE_COUNT] {
         return self;
     }
+
+    #[inline(always)]
+    pub fn as_mut_tiles(&mut self) -> &mut [Tile; TILE_COUNT] {
+        return self;
+    }
 }
 
-impl Deref for Chr {
+impl Deref for PatternTable {
     type Target = [Tile; TILE_COUNT];
 
     #[inline(always)]
@@ -41,12 +58,19 @@ impl Deref for Chr {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+impl DerefMut for PatternTable {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(transparent)]
 pub struct Tile([u8; 16]);
 
 impl Tile {
-    pub fn get_pixel(&self, x: u8, y: u8) -> Option<Pixel> {
+    pub fn get_pixel(&self, x: u8, y: u8) -> Option<u2> {
         if x >= 8 || y >= 8 {
             return None;
         }
@@ -55,17 +79,19 @@ impl Tile {
         let hi = (self.0[y as usize + 0x8] >> x) & 1 == 1;
 
         return Some(match lo as u8 + ((hi as u8) << 1) {
-            0 => Pixel::Zero,
-            1 => Pixel::One,
-            2 => Pixel::Two,
-            3 => Pixel::Three,
+            0 => u2::Zero,
+            1 => u2::One,
+            2 => u2::Two,
+            3 => u2::Three,
             _ => unsafe { unreachable_unchecked() },
         });
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Pixel {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[allow(non_camel_case_types)]
+pub enum u2 {
+    #[default]
     Zero = 0,
     One = 1,
     Two = 2,
