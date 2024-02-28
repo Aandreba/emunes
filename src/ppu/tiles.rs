@@ -97,3 +97,9 @@ pub enum u2 {
     Two = 2,
     Three = 3,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Bank {
+    Left,
+    Right,
+}

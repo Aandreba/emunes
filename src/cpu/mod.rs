@@ -21,6 +21,7 @@ pub struct Cpu<M, B = Interpreter> {
     pub decimal_enabled: bool,
     pub memory: M,
     pub backend: B,
+    pub nmi_interrupt: bool,
 }
 
 impl<M, B> Cpu<M, B> {
@@ -34,6 +35,7 @@ impl<M, B> Cpu<M, B> {
             decimal_enabled: true,
             memory,
             backend,
+            nmi_interrupt: false,
         };
     }
 
@@ -47,13 +49,13 @@ impl<M, B> Cpu<M, B> {
 }
 
 impl<M: Memory, B: Backend> Cpu<M, B> {
-    pub fn restart(&mut self, tick: impl FnMut(&mut M, u8)) -> Result<(), RunError<M, B>> {
+    pub fn restart(&mut self, tick: impl FnMut(&mut Self, u8)) -> Result<(), RunError<M, B>> {
         let pc = self.memory.read_u16(0xfffc).map_err(RunError::Memory)?;
         self.run(pc, tick)
     }
 
     #[inline(always)]
-    pub fn run(&mut self, pc: u16, tick: impl FnMut(&mut M, u8)) -> Result<(), RunError<M, B>> {
+    pub fn run(&mut self, pc: u16, tick: impl FnMut(&mut Self, u8)) -> Result<(), RunError<M, B>> {
         return B::run(self, pc, tick);
     }
 }
