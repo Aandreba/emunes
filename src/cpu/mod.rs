@@ -50,6 +50,11 @@ impl<M, B> Cpu<M, B> {
 
 impl<M: Memory, B: Backend> Cpu<M, B> {
     pub fn restart(&mut self, tick: impl FnMut(&mut Self, u8)) -> Result<(), RunError<M, B>> {
+        self.accumulator = 0;
+        self.x = 0;
+        self.y = 0;
+        self.stack_ptr = 0xfd;
+        self.flags = Flags::from_u8(0b100100);
         let pc = self.memory.read_u16(0xfffc).map_err(RunError::Memory)?;
         self.run(pc, tick)
     }

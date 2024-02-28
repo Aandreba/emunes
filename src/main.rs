@@ -7,11 +7,13 @@ use std::{
 };
 
 pub fn main() {
+    simple_logger::SimpleLogger::new().init().unwrap();
+
     block_on(async move {
         let pacman = std::fs::read("Pac-Man (USA) (Namco).nes").unwrap();
         let cartridge = Cartridge::new(&pacman).unwrap();
 
-        let mut nes = Nes::new(cartridge).await.unwrap();
+        let nes = Nes::new(cartridge).await.unwrap();
         nes.run().unwrap();
     });
 }

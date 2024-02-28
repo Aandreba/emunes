@@ -44,16 +44,16 @@ impl Ppu {
         };
     }
 
-    pub fn tick(&mut self, cycles: u8) -> bool {
+    pub fn tick(&mut self, nmi_interrupt: &mut bool, cycles: u8) -> bool {
         self.current_cycle += cycles as u64;
         if self.current_cycle >= 341 {
             self.current_cycle = self.current_cycle - 341;
             self.current_scanline += 1;
 
             if self.current_scanline == 241 {
-                if self.controller.vbi_nmi_enabled() {
+                if true || self.controller.vbi_nmi_enabled() {
                     self.status.set_vblank_started(true);
-                    todo!("Should trigger NMI interrupt")
+                    *nmi_interrupt = true;
                 }
             }
 

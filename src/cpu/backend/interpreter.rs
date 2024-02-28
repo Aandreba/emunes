@@ -1,5 +1,3 @@
-use std::convert::Infallible;
-
 use super::Backend;
 use crate::cpu::{
     bcd::{bcd_to_u8, u8_to_bcd},
@@ -8,6 +6,7 @@ use crate::cpu::{
     memory::Memory,
     Cpu, RunError,
 };
+use std::convert::Infallible;
 
 pub struct Interpreter;
 
@@ -25,12 +24,22 @@ impl Backend for Interpreter {
             let prev_pc = pc;
             tick(cpu, prev_cycles);
 
+            // Handle NMI interrupt
+            if core::mem::replace(&mut cpu.nmi_interrupt, false) {
+                log::debug!("NMI interrupt");
+                cpu.push_u16(pc.wrapping_add(1))?;
+                cpu.push(cpu.flags.into_u8(true))?;
+                cpu.flags.insert(Flag::InterruptDisable);
+                tick(cpu, 2);
+                pc = cpu.memory.read_u16(0xfffa).map_err(RunError::Memory)?;
+                continue;
+            }
+
             let instr = read_instruction(&mut cpu.memory, &mut pc)
                 .map_err(RunError::Memory)?
                 .expect(&format!("unknown instruction found at 0x{prev_pc:04X}"));
 
             prev_cycles = instr.cycles();
-
             log::trace!("{prev_pc:04X}: {instr:04X?}");
 
             match instr {
