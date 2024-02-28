@@ -1,20 +1,33 @@
-use crate::{cartridge::Cartridge, cpu::memory::Memory, ppu::Ppu};
+use winit::event_loop::EventLoop;
+
+use crate::{
+    cartridge::Cartridge,
+    cpu::memory::Memory,
+    ppu::Ppu,
+    video::{Error, Video},
+};
 
 pub struct NesMemory {
     pub ram: Box<[u8; 0x800]>,
     pub prg_rom: Box<[u8]>,
     pub ppu: Ppu,
     pub nmi_interrupt: bool,
+    pub video: Video,
 }
 
 impl NesMemory {
-    pub fn new(cartridge: Cartridge) -> Self {
-        return Self {
-            ram: Box::new([0; 0x800]),
-            prg_rom: cartridge.prg_rom.into_boxed_slice(),
-            ppu: Ppu::new(cartridge.chr_rom, cartridge.screen_mirroring),
-            nmi_interrupt: false,
-        };
+    pub async fn new(cartridge: Cartridge) -> Result<(Self, EventLoop<()>), Error> {
+        let (video, event_loop) = Video::new().await?;
+        return Ok((
+            Self {
+                ram: Box::new([0; 0x800]),
+                prg_rom: cartridge.prg_rom.into_boxed_slice(),
+                ppu: Ppu::new(cartridge.chr_rom, cartridge.screen_mirroring),
+                nmi_interrupt: false,
+                video,
+            },
+            event_loop,
+        ));
     }
 
     pub fn write_oam_dma(&mut self, val: u8) -> Result<(), <Self as Memory>::Error> {
@@ -44,7 +57,10 @@ impl Memory for NesMemory {
             0x2008..=0x3fff => return self.read_u8(0x2000 + ((addr - 0x2008) % 8)),
             // TODO APU registers
             0x4000..=0x4017 => 0,
-            0x8000..=0xFFFF => self.prg_rom[(addr % 0x8000) as usize],
+            0x8000..=0xFFFF => {
+                let addr = (addr % 0x8000) as usize;
+                self.prg_rom[addr % self.prg_rom.len()]
+            }
             _ => return Err(MemoryError::UnknownAddress(addr)),
         });
     }

@@ -1,3 +1,7 @@
+use std::hint::unreachable_unchecked;
+
+use crate::ppu::tiles::{u2, Bank};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct Controller(u8);
@@ -7,9 +11,14 @@ impl Controller {
         self.0 = bits
     }
 
-    pub const fn base_nametable_address(self) -> u16 {
-        let offset = self.0 & 0b11;
-        return 0x2000 + (offset as u16) * 0x400;
+    pub const fn base_nametable_index(self) -> u2 {
+        return match self.0 & 0b11 {
+            0 => u2::Zero,
+            1 => u2::One,
+            2 => u2::Two,
+            3 => u2::Three,
+            _ => unsafe { unreachable_unchecked() },
+        };
     }
 
     pub const fn vram_address_increment(self) -> u16 {
@@ -26,10 +35,10 @@ impl Controller {
         };
     }
 
-    pub const fn background_pattern_table_address(self) -> u16 {
+    pub const fn background_pattern_table_bank(self) -> Bank {
         return match self.0 & 0b10000 != 0 {
-            false => 0x0,
-            true => 0x1000,
+            false => Bank::Left,
+            true => Bank::Right,
         };
     }
 

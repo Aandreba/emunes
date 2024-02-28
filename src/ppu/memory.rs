@@ -27,6 +27,13 @@ impl Memory {
         };
     }
 
+    pub fn right_table(&self) -> &PatternTable {
+        match self.right_table {
+            Some(ref table) => table,
+            None => &self.left_table,
+        }
+    }
+
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
             0x0000..=0x0fff => self.left_table.as_bytes()[addr as usize],
@@ -47,14 +54,7 @@ impl Memory {
 
     pub fn write(&mut self, addr: u16, val: u8) {
         match addr {
-            0x0000..=0x0fff => self.left_table.as_mut_bytes()[addr as usize] = val,
-            0x1000..=0x1fff => {
-                let addr = addr - 0x1000;
-                (match self.right_table {
-                    Some(ref mut table) => table.as_mut_bytes(),
-                    None => self.left_table.as_mut_bytes(),
-                })[addr as usize] = val;
-            }
+            0x0000..=0x1fff => unreachable!("read-only memory"),
             0x2000..=0x2fff => self.name_tables.write(addr - 0x2000, val),
             0x3000..=0x3eff => self.name_tables.write(addr - 0x3000, val),
             0x3f00..=0x3f1f => self.palette.write(addr, val),

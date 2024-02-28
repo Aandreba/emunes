@@ -19,6 +19,12 @@ impl NameTable {
     pub fn as_mut_bytes(&mut self) -> &mut [u8; 1024] {
         return bytemuck::cast_mut(self);
     }
+
+    pub fn get_palette_idx(&self, tile_row: usize, tile_col: usize) -> u2 {
+        let attribute = self.attributes[tile_row / 4][tile_col / 4];
+        let idx = (tile_row % 4 / 2) | ((tile_col % 4 / 2) << 1);
+        return attribute.get(idx as u8);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Pod, Zeroable)]
@@ -26,8 +32,8 @@ impl NameTable {
 pub struct Attribute(u8);
 
 impl Attribute {
-    pub fn get(self, x: X, y: Y) -> u2 {
-        let offset = offset(x, y);
+    pub fn get(&self, idx: u8) -> u2 {
+        let offset = idx << 1;
         return match (self.0 >> offset) & 0b11 {
             0 => u2::Zero,
             1 => u2::One,
@@ -36,26 +42,4 @@ impl Attribute {
             _ => unsafe { unreachable_unchecked() },
         };
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum X {
-    Top,
-    Bottom,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Y {
-    Left,
-    Right,
-}
-
-#[inline(always)]
-pub fn offset(x: X, y: Y) -> u8 {
-    return match (x, y) {
-        (X::Top, Y::Left) => 0,
-        (X::Top, Y::Right) => 2,
-        (X::Bottom, Y::Left) => 4,
-        (X::Bottom, Y::Right) => 8,
-    };
 }

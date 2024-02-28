@@ -13,13 +13,12 @@ const HEIGHT: usize = 240;
 pub mod palette;
 
 pub struct Video {
-    event_loop: EventLoop<()>,
-    window: Window,
-    pixels: Pixels,
+    pub window: Window,
+    pub pixels: Pixels,
 }
 
 impl Video {
-    pub fn new() -> Result<Self, Error> {
+    pub async fn new() -> Result<(Self, EventLoop<()>), Error> {
         let event_loop = EventLoop::new()?;
         let window = WindowBuilder::new()
             .with_title("emunes")
@@ -28,13 +27,9 @@ impl Video {
 
         let size = window.inner_size();
         let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
-        let pixels = Pixels::new(WIDTH as u32, HEIGHT as u32, surface_texture)?;
+        let pixels = Pixels::new_async(WIDTH as u32, HEIGHT as u32, surface_texture).await?;
 
-        return Ok(Self {
-            event_loop,
-            window,
-            pixels,
-        });
+        return Ok((Self { window, pixels }, event_loop));
     }
 
     #[inline]

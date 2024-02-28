@@ -9,6 +9,7 @@ pub mod nametable;
 pub mod oam;
 pub mod palette;
 pub mod registers;
+pub mod render;
 pub mod tiles;
 
 #[derive(Debug, Clone)]
@@ -24,6 +25,7 @@ pub struct Ppu {
     data_buffer: u8,
     // TODO scroll
     current_cycle: u64,
+    current_scanline: u64,
 }
 
 impl Ppu {
@@ -38,12 +40,30 @@ impl Ppu {
             address: Address::default(),
             data_buffer: 0,
             current_cycle: 0,
+            current_scanline: 0,
         };
     }
 
-    pub fn tick(&mut self, cycles: u8) {
+    pub fn tick(&mut self, cycles: u8) -> bool {
         self.current_cycle += cycles as u64;
-        todo!()
+        if self.current_cycle >= 341 {
+            self.current_cycle = self.current_cycle - 341;
+            self.current_scanline += 1;
+
+            if self.current_scanline == 241 {
+                if self.controller.vbi_nmi_enabled() {
+                    self.status.set_vblank_started(true);
+                    todo!("Should trigger NMI interrupt")
+                }
+            }
+
+            if self.current_scanline >= 262 {
+                self.current_scanline = 0;
+                self.status.set_vblank_started(false);
+                return true;
+            }
+        }
+        return false;
     }
 }
 
