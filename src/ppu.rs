@@ -1,9 +1,8 @@
-use crate::cartridge::Cartridge;
-
 use self::{
     memory::Memory,
     registers::{address::Address, controller::Controller, mask::Mask, status::Status},
 };
+use crate::cartridge::Cartridge;
 
 pub mod memory;
 pub mod nametable;
@@ -24,10 +23,11 @@ pub struct Ppu {
     data_buffer: u8,
     // TODO scroll
     current_cycle: u64,
+    pub last_write: u8,
 }
 
 impl Ppu {
-    pub fn new(cartride: Cartridge) -> Self {
+    pub fn new(cartridge: Cartridge) -> Self {
         return Self {
             memory: todo!(),
             controller: todo!(),
@@ -38,6 +38,7 @@ impl Ppu {
             address: todo!(),
             data_buffer: todo!(),
             current_cycle: todo!(),
+            last_write: 0,
         };
     }
 
@@ -48,13 +49,28 @@ impl Ppu {
 }
 
 impl Ppu {
+    pub fn read_status(&mut self) -> u8 {
+        let res = self.status.into_inner() | 0;
+        return res;
+    }
+
     pub fn read_data(&mut self) -> u8 {
         let addr = self.address.into_inner();
-        todo!();
+
+        let mut res = self.memory.read(addr);
+        if addr <= 0x3eff {
+            res = core::mem::replace(&mut self.data_buffer, self.memory.read(addr));
+        }
+
+        self.address
+            .increment(self.controller.vram_address_increment());
+        return res;
     }
 
     pub fn write_data(&mut self, val: u8) {
         let addr = self.address.into_inner();
-        todo!()
+        self.memory.write(addr, val);
+        self.address
+            .increment(self.controller.vram_address_increment());
     }
 }

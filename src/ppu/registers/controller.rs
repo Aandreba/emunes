@@ -12,7 +12,7 @@ impl Controller {
         return 0x2000 + (offset as u16) * 0x400;
     }
 
-    pub const fn vram_address_increment(self) -> u64 {
+    pub const fn vram_address_increment(self) -> u16 {
         return match self.0 & 0b100 != 0 {
             false => 1,
             true => 32,

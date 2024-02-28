@@ -15,8 +15,10 @@ impl Status {
         return self.0 & 0b100000 != 0;
     }
 
-    pub const fn into_inner(self) -> u8 {
-        return self.0;
+    pub fn read(&mut self) -> u8 {
+        let res = self.0;
+        self.set_vblank_started(false);
+        return res;
     }
 }
 

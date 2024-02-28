@@ -2,8 +2,8 @@ use super::{memory::Memory, Cpu, RunError};
 use std::fmt::Debug;
 
 pub mod interpreter;
-#[cfg(feature = "llvm")]
-pub mod llvm;
+// #[cfg(feature = "llvm")]
+// pub mod llvm;
 
 pub trait Backend: Sized {
     type Error: Debug;
@@ -11,6 +11,6 @@ pub trait Backend: Sized {
     fn run<M: Memory>(
         cpu: &mut Cpu<M, Self>,
         pc: u16,
-        tick: impl FnMut(u8),
+        tick: impl FnMut(&mut M, u8),
     ) -> Result<(), RunError<M, Self>>;
 }

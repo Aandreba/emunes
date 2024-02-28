@@ -17,13 +17,13 @@ impl Backend for Interpreter {
     fn run<M: Memory>(
         cpu: &mut Cpu<M, Self>,
         mut pc: u16,
-        mut tick: impl FnMut(u8),
+        mut tick: impl FnMut(&mut M, u8),
     ) -> Result<(), RunError<M, Self>> {
         let mut prev_cycles = 0;
 
         loop {
             let prev_pc = pc;
-            tick(prev_cycles);
+            tick(&mut cpu.memory, prev_cycles);
 
             let instr = read_instruction(&cpu.memory, &mut pc)
                 .map_err(RunError::Memory)?
@@ -40,7 +40,7 @@ impl Backend for Interpreter {
                     cpu.flags.set_nz(cpu.accumulator);
 
                     if page_crossed {
-                        tick(1);
+                        tick(&mut cpu.memory, 1);
                     }
                 }
                 Instr::LDX(op) => {
@@ -49,7 +49,7 @@ impl Backend for Interpreter {
                     cpu.flags.set_nz(cpu.x);
 
                     if page_crossed {
-                        tick(1);
+                        tick(&mut cpu.memory, 1);
                     }
                 }
                 Instr::LDY(op) => {
@@ -58,7 +58,7 @@ impl Backend for Interpreter {
                     cpu.flags.set_nz(cpu.y);
 
                     if page_crossed {
-                        tick(1);
+                        tick(&mut cpu.memory, 1);
                     }
                 }
                 Instr::STA(addr) => {
@@ -109,7 +109,7 @@ impl Backend for Interpreter {
                     cpu.flags.set_nz(cpu.accumulator);
 
                     if page_crossed {
-                        tick(1);
+                        tick(&mut cpu.memory, 1);
                     }
                 }
                 Instr::EOR(op) => {
@@ -118,7 +118,7 @@ impl Backend for Interpreter {
                     cpu.flags.set_nz(cpu.accumulator);
 
                     if page_crossed {
-                        tick(1);
+                        tick(&mut cpu.memory, 1);
                     }
                 }
                 Instr::ORA(op) => {
@@ -127,7 +127,7 @@ impl Backend for Interpreter {
                     cpu.flags.set_nz(cpu.accumulator);
 
                     if page_crossed {
-                        tick(1);
+                        tick(&mut cpu.memory, 1);
                     }
                 }
                 Instr::BIT(addr) => {
@@ -176,7 +176,7 @@ impl Backend for Interpreter {
                     cpu.flags.set(Flag::Negative, res & 0x80 != 0);
 
                     if page_crossed {
-                        tick(1)
+                        tick(&mut cpu.memory, 1)
                     }
                 }
                 // https://github.com/kromych/yamos6502/blob/main/src/yamos6502.rs#L628
@@ -216,7 +216,7 @@ impl Backend for Interpreter {
                     cpu.flags.set(Flag::Negative, res & 0x80 != 0);
 
                     if page_crossed {
-                        tick(1)
+                        tick(&mut cpu.memory, 1)
                     }
                 }
                 Instr::CMP(op) => {
@@ -226,7 +226,7 @@ impl Backend for Interpreter {
                     cpu.flags.set(Flag::Negative, cpu.accumulator < op);
 
                     if page_crossed {
-                        tick(1)
+                        tick(&mut cpu.memory, 1)
                     }
                 }
                 Instr::CPX(op) => {
@@ -365,25 +365,25 @@ impl Backend for Interpreter {
                 }
                 Instr::BCC(addr) => {
                     if !cpu.flags.contains(Flag::Carry) {
-                        tick(1 + page_crossed(pc, addr) as u8);
+                        tick(&mut cpu.memory, 1 + page_crossed(pc, addr) as u8);
                         pc = addr;
                     }
                 }
                 Instr::BCS(addr) => {
                     if cpu.flags.contains(Flag::Carry) {
-                        tick(1 + page_crossed(pc, addr) as u8);
+                        tick(&mut cpu.memory, 1 + page_crossed(pc, addr) as u8);
                         pc = addr;
                     }
                 }
                 Instr::BEQ(addr) => {
                     if cpu.flags.contains(Flag::Zero) {
-                        tick(1 + page_crossed(pc, addr) as u8);
+                        tick(&mut cpu.memory, 1 + page_crossed(pc, addr) as u8);
                         pc = addr;
                     }
                 }
                 Instr::BMI(addr) => {
                     if cpu.flags.contains(Flag::Negative) {
-                        tick(1 + page_crossed(pc, addr) as u8);
+                        tick(&mut cpu.memory, 1 + page_crossed(pc, addr) as u8);
                         pc = addr;
                     }
                 }
@@ -394,25 +394,25 @@ impl Backend for Interpreter {
                             return Ok(());
                         }
 
-                        tick(1 + page_crossed(pc, addr) as u8);
+                        tick(&mut cpu.memory, 1 + page_crossed(pc, addr) as u8);
                         pc = addr;
                     }
                 }
                 Instr::BPL(addr) => {
                     if !cpu.flags.contains(Flag::Negative) {
-                        tick(1 + page_crossed(pc, addr) as u8);
+                        tick(&mut cpu.memory, 1 + page_crossed(pc, addr) as u8);
                         pc = addr;
                     }
                 }
                 Instr::BVC(addr) => {
                     if !cpu.flags.contains(Flag::Overflow) {
-                        tick(1 + page_crossed(pc, addr) as u8);
+                        tick(&mut cpu.memory, 1 + page_crossed(pc, addr) as u8);
                         pc = addr;
                     }
                 }
                 Instr::BVS(addr) => {
                     if cpu.flags.contains(Flag::Overflow) {
-                        tick(1 + page_crossed(pc, addr) as u8);
+                        tick(&mut cpu.memory, 1 + page_crossed(pc, addr) as u8);
                         pc = addr;
                     }
                 }

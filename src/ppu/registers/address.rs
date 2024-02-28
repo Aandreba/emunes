@@ -8,7 +8,11 @@ impl Address {
         self.0 |= val as u16
     }
 
+    pub fn increment(&mut self, delta: u16) {
+        self.0 = self.0.wrapping_add(delta)
+    }
+
     pub const fn into_inner(self) -> u16 {
-        return self.0;
+        return self.0 % 0x4000;
     }
 }
