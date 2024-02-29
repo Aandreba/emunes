@@ -52,6 +52,7 @@ impl Ppu {
 
             if self.current_scanline == 241 {
                 self.status.set_vblank_started(true);
+                self.status.set_sprite_zero_hit(false);
                 if self.controller.vbi_nmi_enabled() {
                     *nmi_interrupt = true;
                 }
@@ -59,6 +60,8 @@ impl Ppu {
 
             if self.current_scanline >= 262 {
                 self.current_scanline = 0;
+                *nmi_interrupt = false;
+                self.status.set_sprite_zero_hit(false);
                 self.status.set_vblank_started(false);
                 return true;
             }

@@ -82,8 +82,8 @@ pub enum NameTables {
 
 impl NameTables {
     pub fn read(&self, offset: u16) -> u8 {
-        let addr = offset / 0x400;
-        let idx = match offset % 0x400 {
+        let addr = offset % 0x400;
+        let idx = match offset / 0x400 {
             0 => u2::Zero,
             1 => u2::One,
             2 => u2::Two,
@@ -94,8 +94,8 @@ impl NameTables {
     }
 
     pub fn write(&mut self, offset: u16, val: u8) {
-        let addr = offset / 0x400;
-        let idx = match offset % 0x400 {
+        let addr = offset % 0x400;
+        let idx = match offset / 0x400 {
             0 => u2::Zero,
             1 => u2::One,
             2 => u2::Two,

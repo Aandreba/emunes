@@ -34,7 +34,7 @@ impl Ppu {
                     .get_background_palette(palette_idx, colors);
 
                 for y in 0..8 {
-                    for x in (0..8).rev() {
+                    for x in 0..8 {
                         let color = match tile.get_pixel(x, y).unwrap() {
                             u2::Zero => self.memory.palette.get_ubc(colors),
                             u2::One => palette[0],

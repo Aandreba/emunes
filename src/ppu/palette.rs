@@ -4,8 +4,8 @@ use crate::video::{palette::Palette, Color};
 #[derive(Debug, Clone, Default)]
 pub struct PaletteMemory {
     pub universal_background_color: u8,
-    pub background: [u8; 14],
-    pub sprite: [u8; 14],
+    pub background: [u8; 16],
+    pub sprite: [u8; 16],
 }
 
 impl PaletteMemory {

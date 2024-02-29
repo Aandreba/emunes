@@ -27,7 +27,7 @@ impl Backend for Interpreter {
             // Handle NMI interrupt
             if core::mem::replace(&mut cpu.nmi_interrupt, false) {
                 log::debug!("NMI interrupt");
-                cpu.push_u16(pc.wrapping_add(1))?;
+                cpu.push_u16(pc)?;
                 cpu.push(cpu.flags.into_u8(true))?;
                 cpu.flags.insert(Flag::InterruptDisable);
                 tick(cpu, 2);
@@ -37,7 +37,10 @@ impl Backend for Interpreter {
 
             let instr = read_instruction(&mut cpu.memory, &mut pc)
                 .map_err(RunError::Memory)?
-                .expect(&format!("unknown instruction found at 0x{prev_pc:04X}"));
+                .expect(&format!(
+                    "unknown instruction found at 0x{prev_pc:04X}: 0x{:02X}",
+                    cpu.memory.read_u8(prev_pc).unwrap()
+                ));
 
             prev_cycles = instr.cycles();
             log::trace!("{prev_pc:04X}: {instr:04X?}");
