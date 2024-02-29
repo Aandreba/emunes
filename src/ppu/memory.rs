@@ -1,7 +1,7 @@
 use super::{
     nametable::NameTable,
     palette::PaletteMemory,
-    tiles::{u2, PatternTable},
+    tiles::{u2, Bank, PatternTable},
 };
 
 #[derive(Debug, Clone)]
@@ -106,6 +106,18 @@ impl NameTables {
         };
 
         self.get_mut_table(idx).as_mut_bytes()[addr as usize] = val;
+    }
+
+    pub fn get_bank(&self, bank: Bank) -> Option<&NameTable> {
+        match (self, bank) {
+            (NameTables::Horizontal(tables) | NameTables::Vertical(tables), Bank::Left) => {
+                Some(&tables[0])
+            }
+            (NameTables::Horizontal(tables) | NameTables::Vertical(tables), Bank::Right) => {
+                Some(&tables[1])
+            }
+            _ => None,
+        }
     }
 
     pub fn get_table(&self, idx: u2) -> &NameTable {

@@ -1,7 +1,9 @@
 use self::{
     memory::Memory,
     oam::Oam,
-    registers::{address::Address, controller::Controller, mask::Mask, status::Status},
+    registers::{
+        address::Address, controller::Controller, mask::Mask, scroll::Scroll, status::Status,
+    },
 };
 
 pub mod memory;
@@ -22,8 +24,8 @@ pub struct Ppu {
     pub oam_address: u8,
     pub oam_data: Oam,
     pub address: Address,
+    pub scroll: Scroll,
     data_buffer: u8,
-    // TODO scroll
     current_cycle: u64,
     current_scanline: u64,
 }
@@ -38,6 +40,7 @@ impl Ppu {
             oam_address: 0,
             oam_data: Oam::default(),
             address: Address::default(),
+            scroll: Scroll::default(),
             data_buffer: 0,
             current_cycle: 0,
             current_scanline: 0,
@@ -47,6 +50,10 @@ impl Ppu {
     pub fn tick(&mut self, nmi_interrupt: &mut bool, cycles: u8) -> bool {
         self.current_cycle += cycles as u64;
         if self.current_cycle >= 341 {
+            if self.is_sprite_0_hit(self.current_cycle) {
+                self.status.set_sprite_zero_hit(true);
+            }
+
             self.current_cycle = self.current_cycle - 341;
             self.current_scanline += 1;
 
@@ -67,6 +74,12 @@ impl Ppu {
             }
         }
         return false;
+    }
+
+    fn is_sprite_0_hit(&self, cycle: u64) -> bool {
+        let y = self.oam_data[0].top_y as u64;
+        let x = self.oam_data[3].left_x as u64;
+        (y == self.current_scanline) && x <= cycle && self.mask.show_sprites()
     }
 }
 
@@ -117,8 +130,8 @@ impl Ppu {
         self.oam_address = self.oam_address.wrapping_add(1);
     }
 
-    pub fn write_scroll(&mut self, _: u8) {
-        log::error!("scroll not yet implemented")
+    pub fn write_scroll(&mut self, val: u8) {
+        self.scroll.write(val)
     }
 
     pub fn write_data(&mut self, val: u8) {

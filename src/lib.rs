@@ -47,7 +47,6 @@ impl Nes {
                     return;
                 }
 
-                println!("{}", player1.handle_input(&input));
                 joypad1.store(player1.handle_input(&input), Ordering::Release);
                 if let Some(ref player2) = player2 {
                     joypad2.store(player2.handle_input(&input), Ordering::Release);

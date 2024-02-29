@@ -14,6 +14,7 @@ pub fn main() {
 
     block_on(async move {
         let pacman = std::fs::read("Pac-Man (USA) (Namco).nes").unwrap();
+        // let pacman = std::fs::read("Super Mario Bros. (Japan, USA).nes").unwrap();
         let cartridge = Cartridge::new(&pacman).unwrap();
 
         let nes = Nes::new(cartridge).await.unwrap();
