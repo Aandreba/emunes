@@ -1,20 +1,17 @@
-use std::rc::Rc;
-
 use cartridge::Cartridge;
 use cpu::{backend::interpreter::Interpreter, Cpu, RunError};
+use joystick::Joystick;
 use memory::NesMemory;
+use std::{rc::Rc, sync::atomic::Ordering};
 use video::Error;
-use winit::{
-    event_loop::{EventLoop, EventLoopWindowTarget},
-    keyboard::KeyCode,
-    platform::run_on_demand::EventLoopExtRunOnDemand,
-};
+use winit::event_loop::{EventLoop, EventLoopWindowTarget};
 use winit_input_helper::WinitInputHelper;
 
 use crate::video::palette::SYSTEM_PALETTE;
 
 pub mod cartridge;
 pub mod cpu;
+pub mod joystick;
 pub mod memory;
 pub mod ppu;
 pub mod video;
@@ -33,36 +30,27 @@ impl Nes {
         return Ok(Self { cpu, event_loop });
     }
 
-    pub fn display_chr_rom(&mut self) {
+    pub fn run(
+        mut self,
+        player1: Joystick,
+        player2: Option<Joystick>,
+    ) -> Result<(), RunError<NesMemory, Interpreter>> {
         let mut input = WinitInputHelper::new();
-        let event_loop = move |event, elwt: &EventLoopWindowTarget<_>| {
-            if input.update(&event) {
-                // Esc --> Exit
-                if input.close_requested() || input.key_pressed(KeyCode::Escape) {
-                    elwt.exit();
-                    return;
-                }
-            }
-        };
+        let joypad1 = self.cpu.memory.joypad1.status.clone();
+        let joypad2 = self.cpu.memory.joypad2.status.clone();
 
-        cfg_if::cfg_if! {
-            if #[cfg(target_family = "wasm")] {
-                EventLoopExtWebSys::spawn(self.event_loop, event_loop);
-                return self.cpu.restart(tick);
-            } else {
-                self.event_loop.run_on_demand(event_loop).unwrap();
-            }
-        }
-    }
-
-    pub fn run(mut self) -> Result<(), RunError<NesMemory, Interpreter>> {
-        let mut input = WinitInputHelper::new();
         let mut event_loop = move |event, elwt: &EventLoopWindowTarget<_>| {
             if input.update(&event) {
                 // Esc --> Exit
-                if input.close_requested() || input.key_pressed(KeyCode::Escape) {
+                if input.close_requested() {
                     elwt.exit();
                     return;
+                }
+
+                println!("{}", player1.handle_input(&input));
+                joypad1.store(player1.handle_input(&input), Ordering::Release);
+                if let Some(ref player2) = player2 {
+                    joypad2.store(player2.handle_input(&input), Ordering::Release);
                 }
             }
         };

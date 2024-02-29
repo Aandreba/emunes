@@ -1,4 +1,4 @@
-use emunes::{cartridge::Cartridge, Nes};
+use emunes::{cartridge::Cartridge, joystick::Joystick, Nes};
 use std::{
     future::Future,
     sync::Arc,
@@ -17,7 +17,7 @@ pub fn main() {
         let cartridge = Cartridge::new(&pacman).unwrap();
 
         let nes = Nes::new(cartridge).await.unwrap();
-        nes.run().unwrap();
+        nes.run(Joystick::ARROW, None).unwrap();
     });
 }
 

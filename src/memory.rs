@@ -1,11 +1,14 @@
-use winit::event_loop::EventLoop;
-
 use crate::{
     cartridge::Cartridge,
     cpu::memory::Memory,
     ppu::Ppu,
     video::{Error, Video},
 };
+use std::sync::{
+    atomic::{AtomicU8, Ordering},
+    Arc,
+};
+use winit::event_loop::EventLoop;
 
 pub struct NesMemory {
     pub ram: Box<[u8; 0x800]>,
@@ -13,6 +16,8 @@ pub struct NesMemory {
     pub ppu: Ppu,
     pub nmi_interrupt: bool,
     pub video: Video,
+    pub joypad1: Joypad,
+    pub joypad2: Joypad,
 }
 
 impl NesMemory {
@@ -24,6 +29,8 @@ impl NesMemory {
                 prg_rom: cartridge.prg_rom.into_boxed_slice(),
                 ppu: Ppu::new(cartridge.chr_rom, cartridge.screen_mirroring),
                 nmi_interrupt: false,
+                joypad1: Joypad::default(),
+                joypad2: Joypad::default(),
                 video,
             },
             event_loop,
@@ -55,6 +62,8 @@ impl Memory for NesMemory {
             0x2007 => self.ppu.read_data(),
             0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 => return Err(MemoryError::WriteOnly(addr)),
             0x2008..=0x3fff => return self.read_u8(0x2000 + ((addr - 0x2008) % 8)),
+            0x4016 => self.joypad1.read(),
+            0x4017 => self.joypad2.read(),
             // TODO APU registers
             0x4000..=0x4017 => 0,
             0x8000..=0xFFFF => {
@@ -76,6 +85,8 @@ impl Memory for NesMemory {
             0x2006 => self.ppu.write_address(val),
             0x2007 => self.ppu.write_data(val),
             0x4014 => return self.write_oam_dma(val),
+            0x4016 => self.joypad1.write(val),
+            0x4017 => self.joypad2.write(val),
             0x2008..=0x3fff => return self.write_u8(0x2000 + ((addr - 0x2008) % 8), val),
             // TODO APU registers
             0x4000..=0x4017 => {}
@@ -84,6 +95,35 @@ impl Memory for NesMemory {
         };
 
         return Ok(());
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct Joypad {
+    strobe: bool,
+    button_index: u8,
+    pub status: Arc<AtomicU8>,
+}
+
+impl Joypad {
+    //...
+    pub fn write(&mut self, data: u8) {
+        self.strobe = data & 1 == 1;
+        if self.strobe {
+            self.button_index = 0
+        }
+    }
+
+    pub fn read(&mut self) -> u8 {
+        if self.button_index > 7 {
+            return 1;
+        }
+        let response =
+            (self.status.load(Ordering::Acquire) & (1 << self.button_index)) >> self.button_index;
+        if !self.strobe && self.button_index <= 7 {
+            self.button_index += 1;
+        }
+        response
     }
 }
 
