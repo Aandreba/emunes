@@ -18,7 +18,7 @@ impl Memory {
         let mut rom = PatternTable::new(chr_rom).unwrap().into_iter();
 
         return Self {
-            left_table: rom.next().unwrap(),
+            left_table: rom.next().unwrap_or_default(),
             right_table: rom.next(),
             name_tables: match mirror {
                 crate::cartridge::Mirroring::Vertical => NameTables::Vertical(Box::default()),

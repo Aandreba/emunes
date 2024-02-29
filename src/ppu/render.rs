@@ -38,7 +38,6 @@ impl Ppu {
             _ => todo!(),
         };
 
-        println!("{scroll_y}");
         self.render_nametable(
             main_nametable,
             Rect {

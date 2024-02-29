@@ -57,6 +57,14 @@ impl PatternTable {
     }
 }
 
+impl Default for PatternTable {
+    fn default() -> Self {
+        Self {
+            data: Box::new([Tile::default(); TILE_COUNT]),
+        }
+    }
+}
+
 impl Deref for PatternTable {
     type Target = [Tile; TILE_COUNT];
 
