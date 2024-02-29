@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use cartridge::Cartridge;
 use cpu::{backend::interpreter::Interpreter, Cpu, RunError};
 use memory::NesMemory;
@@ -55,7 +57,7 @@ impl Nes {
 
     pub fn run(mut self) -> Result<(), RunError<NesMemory, Interpreter>> {
         let mut input = WinitInputHelper::new();
-        let event_loop = move |event, elwt: &EventLoopWindowTarget<_>| {
+        let mut event_loop = move |event, elwt: &EventLoopWindowTarget<_>| {
             if input.update(&event) {
                 // Esc --> Exit
                 if input.close_requested() || input.key_pressed(KeyCode::Escape) {
@@ -85,13 +87,20 @@ impl Nes {
                 EventLoopExtWebSys::spawn(self.event_loop, event_loop);
                 return self.cpu.restart(tick);
             } else {
-                let handle = std::thread::spawn(move || self
+                let handle = Rc::new(std::thread::spawn(move || self
                     .cpu
-                    .restart(tick));
+                    .restart(tick)));
 
-                self.event_loop.run(event_loop).unwrap();
+                let el_handle = handle.clone();
+                self.event_loop.run(move |event, elwt| {
+                    if el_handle.is_finished() {
+                        elwt.exit();
+                    }
+                    event_loop(event, elwt);
+                }).unwrap();
+
                 if handle.is_finished() {
-                    return handle.join().unwrap()
+                    return Rc::into_inner(handle).unwrap().join().unwrap()
                 } else {
                     return Ok(());
                 }

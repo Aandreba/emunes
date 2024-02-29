@@ -22,7 +22,7 @@ impl NameTable {
 
     pub fn get_palette_idx(&self, tile_row: usize, tile_col: usize) -> u2 {
         let attribute = self.attributes[tile_row / 4][tile_col / 4];
-        let idx = (tile_row % 4 / 2) | ((tile_col % 4 / 2) << 1);
+        let idx = (tile_col % 4 / 2) | ((tile_row % 4 / 2) << 1);
         return attribute.get(idx as u8);
     }
 }

@@ -75,10 +75,10 @@ impl Tile {
             return None;
         }
 
-        let lo = (self.0[y as usize] >> x) & 1 == 1;
-        let hi = (self.0[y as usize + 0x8] >> x) & 1 == 1;
+        let lo = (self.0[y as usize] >> (7 - x)) & 1 == 1;
+        let hi = (self.0[y as usize + 0x8] >> (7 - x)) & 1 == 1;
 
-        return Some(match lo as u8 + ((hi as u8) << 1) {
+        return Some(match lo as u8 | ((hi as u8) << 1) {
             0 => u2::Zero,
             1 => u2::One,
             2 => u2::Two,
