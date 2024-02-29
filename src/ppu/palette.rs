@@ -36,10 +36,7 @@ impl PaletteMemory {
             0x3f00 | 0x3f10 => self.universal_background_color,
             0x3f01..=0x3f0f => self.background[(addr - 0x3f01) as usize],
             0x3f11..=0x3f1f => self.sprite[(addr - 0x3f11) as usize],
-            #[cfg(debug_assertions)]
             _ => unreachable!(),
-            #[cfg(not(debug_assertions))]
-            _ => unsafe { std::hint::unreachable_unchecked() },
         }
     }
 
@@ -48,10 +45,7 @@ impl PaletteMemory {
             0x3f00 | 0x3f10 => &mut self.universal_background_color,
             0x3f01..=0x3f0f => &mut self.background[(addr - 0x3f01) as usize],
             0x3f11..=0x3f1f => &mut self.sprite[(addr - 0x3f11) as usize],
-            #[cfg(debug_assertions)]
             _ => unreachable!(),
-            #[cfg(not(debug_assertions))]
-            _ => unsafe { std::hint::unreachable_unchecked() },
         }) = val
     }
 }

@@ -28,10 +28,10 @@ impl Controller {
         };
     }
 
-    pub const fn sprite_pattern_table_address(self) -> u16 {
+    pub const fn sprite_pattern_table_bank(self) -> Bank {
         return match self.0 & 0b1000 != 0 {
-            false => 0x0,
-            true => 0x1000,
+            false => Bank::Left,
+            true => Bank::Right,
         };
     }
 

@@ -4,7 +4,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-const CHR_SIZE: usize = 8 << 10;
+const CHR_SIZE: usize = 0x1000;
 const TILE_COUNT: usize = CHR_SIZE / size_of::<Tile>();
 
 #[derive(Debug, Clone)]
@@ -13,15 +13,23 @@ pub struct PatternTable {
 }
 
 impl PatternTable {
-    pub fn new(chr_rom: Vec<u8>) -> Option<Self> {
-        let chr_rom = chr_rom.into_boxed_slice();
-        if chr_rom.len() != CHR_SIZE {
+    pub fn new(mut chr_rom: Vec<u8>) -> Option<Vec<Self>> {
+        if chr_rom.len() % CHR_SIZE != 0 {
             return None;
         }
 
-        return Some(Self {
-            data: unsafe { Box::from_raw(Box::into_raw(chr_rom).cast::<[Tile; TILE_COUNT]>()) },
-        });
+        let mut res = Vec::with_capacity(chr_rom.len() / CHR_SIZE);
+        for _ in (0..chr_rom.len()).step_by(CHR_SIZE) {
+            let mut rom = chr_rom.split_off(CHR_SIZE);
+            core::mem::swap(&mut rom, &mut chr_rom);
+
+            let rom = rom.into_boxed_slice();
+            res.push(Self {
+                data: unsafe { Box::from_raw(Box::into_raw(rom).cast::<[Tile; TILE_COUNT]>()) },
+            })
+        }
+
+        return Some(res);
     }
 
     #[inline]
