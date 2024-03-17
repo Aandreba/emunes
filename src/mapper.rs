@@ -1,4 +1,5 @@
 pub mod m0;
+pub mod m2;
 
 pub trait Mapper: Send {
     fn cpu_read(&mut self, addr: u16) -> Option<u8>;

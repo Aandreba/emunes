@@ -1,3 +1,4 @@
+use crate::video::palette::SYSTEM_PALETTE;
 use cartridge::Cartridge;
 use cpu::{backend::interpreter::Interpreter, Cpu, RunError};
 use joystick::Joystick;
@@ -6,8 +7,6 @@ use std::{rc::Rc, sync::atomic::Ordering};
 use video::Error;
 use winit::event_loop::{EventLoop, EventLoopWindowTarget};
 use winit_input_helper::WinitInputHelper;
-
-use crate::video::palette::SYSTEM_PALETTE;
 
 pub mod cartridge;
 pub mod cpu;

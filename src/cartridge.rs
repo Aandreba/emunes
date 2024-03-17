@@ -1,8 +1,8 @@
 //! https://github.com/bugzmanov/nes_ebook/blob/master/code/ch5/src/cartridge.rs
 
 const NES_TAG: [u8; 4] = [0x4E, 0x45, 0x53, 0x1A];
-const PRG_ROM_PAGE_SIZE: usize = 16384;
-const CHR_ROM_PAGE_SIZE: usize = 8192;
+pub const PRG_ROM_PAGE_SIZE: usize = 16384;
+pub const CHR_ROM_PAGE_SIZE: usize = 8192;
 
 pub struct Cartridge {
     pub prg_rom: Vec<u8>,
@@ -14,7 +14,7 @@ pub struct Cartridge {
 impl Cartridge {
     pub fn new(raw: &[u8]) -> Result<Cartridge, String> {
         if &raw[0..4] != NES_TAG {
-            return Err("File is not in iNES file format".to_string());
+            return Err("File is not in iNES format".to_string());
         }
 
         let mapper = (raw[7] & 0b1111_0000) | (raw[6] >> 4);

@@ -1,7 +1,7 @@
 use crate::{
     cartridge::Cartridge,
     cpu::memory::Memory,
-    mapper::{m0::Nrom, Mapper},
+    mapper::{m0::Nrom, m2::UxRom, Mapper},
     ppu::Ppu,
     video::{Error, Video},
 };
@@ -28,13 +28,17 @@ impl NesMemory {
         return Ok((
             Self {
                 ram: Box::new([0; 0x800]),
-                mapper: Box::new(match cartridge.mapper {
-                    0 => Nrom {
+                mapper: match cartridge.mapper {
+                    0 => Box::new(Nrom {
                         prg_ram: zeroed_slice_box(512).try_into().unwrap(),
                         prg_rom: cartridge.prg_rom.into_boxed_slice(),
-                    },
+                    }),
+                    2 | 94 | 180 => Box::new(UxRom {
+                        prg_rom: cartridge.prg_rom.into_boxed_slice(),
+                        bank_select: 0,
+                    }),
                     other => return Err(Error::Mapper(other)),
-                }),
+                },
                 ppu: Ppu::new(cartridge.chr_rom, cartridge.screen_mirroring),
                 nmi_interrupt: false,
                 joypad1: Joypad::default(),
