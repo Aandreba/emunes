@@ -8,7 +8,7 @@ use std::{
 
 pub fn main() {
     simple_logger::SimpleLogger::new()
-        .with_level(log::LevelFilter::Off)
+        .with_level(log::LevelFilter::Debug)
         .init()
         .unwrap();
 

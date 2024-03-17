@@ -93,4 +93,6 @@ pub enum Error {
     Os(#[from] OsError),
     #[error("{0}")]
     Pixels(#[from] pixels::Error),
+    #[error("Unknown mapper: {0}")]
+    Mapper(u8),
 }

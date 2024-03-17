@@ -9,7 +9,7 @@ const TILE_COUNT: usize = CHR_SIZE / size_of::<Tile>();
 
 #[derive(Debug, Clone)]
 pub struct PatternTable {
-    data: Box<[Tile; TILE_COUNT]>,
+    pub data: Box<[Tile; TILE_COUNT]>,
 }
 
 impl PatternTable {

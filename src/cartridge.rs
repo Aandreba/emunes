@@ -43,8 +43,8 @@ impl Cartridge {
         Ok(Cartridge {
             prg_rom: raw[prg_rom_start..(prg_rom_start + prg_rom_size)].to_vec(),
             chr_rom: raw[chr_rom_start..(chr_rom_start + chr_rom_size)].to_vec(),
-            mapper: mapper,
-            screen_mirroring: screen_mirroring,
+            mapper,
+            screen_mirroring,
         })
     }
 }

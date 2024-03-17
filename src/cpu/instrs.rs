@@ -1,4 +1,4 @@
-use crate::cpu::memory::{create_linear_memory, Memory};
+use crate::cpu::memory::Memory;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Instr {
@@ -1084,7 +1084,7 @@ fn test_cycles() {
         map
     };
 
-    let mut mem = create_linear_memory();
+    let mut mem = crate::cpu::memory::create_linear_memory();
     mem[1] = 0;
     mem[2] = 0;
 

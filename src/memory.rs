@@ -1,9 +1,11 @@
 use crate::{
     cartridge::Cartridge,
     cpu::memory::Memory,
+    mapper::{m0::Nrom, Mapper},
     ppu::Ppu,
     video::{Error, Video},
 };
+use bytemuck::zeroed_slice_box;
 use std::sync::{
     atomic::{AtomicU8, Ordering},
     Arc,
@@ -12,7 +14,7 @@ use winit::event_loop::EventLoop;
 
 pub struct NesMemory {
     pub ram: Box<[u8; 0x800]>,
-    pub prg_rom: Box<[u8]>,
+    pub mapper: Box<dyn Mapper>,
     pub ppu: Ppu,
     pub nmi_interrupt: bool,
     pub video: Video,
@@ -26,7 +28,13 @@ impl NesMemory {
         return Ok((
             Self {
                 ram: Box::new([0; 0x800]),
-                prg_rom: cartridge.prg_rom.into_boxed_slice(),
+                mapper: Box::new(match cartridge.mapper {
+                    0 => Nrom {
+                        prg_ram: zeroed_slice_box(512).try_into().unwrap(),
+                        prg_rom: cartridge.prg_rom.into_boxed_slice(),
+                    },
+                    other => return Err(Error::Mapper(other)),
+                }),
                 ppu: Ppu::new(cartridge.chr_rom, cartridge.screen_mirroring),
                 nmi_interrupt: false,
                 joypad1: Joypad::default(),
@@ -55,6 +63,10 @@ impl Memory for NesMemory {
     type Error = MemoryError;
 
     fn read_u8(&mut self, addr: u16) -> Result<u8, Self::Error> {
+        if let Some(val) = self.mapper.cpu_read(addr) {
+            return Ok(val);
+        }
+
         return Ok(match addr {
             0x0000..=0x1fff => self.ram[(addr % 0x0800) as usize],
             0x2002 => self.ppu.read_status(),
@@ -66,15 +78,15 @@ impl Memory for NesMemory {
             0x4017 => self.joypad2.read(),
             // TODO APU registers
             0x4000..=0x4017 => 0,
-            0x8000..=0xFFFF => {
-                let addr = (addr % 0x8000) as usize;
-                self.prg_rom[addr % self.prg_rom.len()]
-            }
             _ => return Err(MemoryError::UnknownAddress(addr)),
         });
     }
 
     fn write_u8(&mut self, addr: u16, val: u8) -> Result<(), Self::Error> {
+        if self.mapper.cpu_write(addr, val) {
+            return Ok(());
+        }
+
         match addr {
             0x0000..=0x1fff => self.ram[(addr % 0x0800) as usize] = val,
             0x2000 => self.nmi_interrupt |= self.ppu.write_controller(val),

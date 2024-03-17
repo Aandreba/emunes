@@ -12,6 +12,7 @@ use crate::video::palette::SYSTEM_PALETTE;
 pub mod cartridge;
 pub mod cpu;
 pub mod joystick;
+pub mod mapper;
 pub mod memory;
 pub mod ppu;
 pub mod video;
