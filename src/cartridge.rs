@@ -1,5 +1,7 @@
 //! https://github.com/bugzmanov/nes_ebook/blob/master/code/ch5/src/cartridge.rs
 
+use std::io::{ErrorKind, Read};
+
 const NES_TAG: [u8; 4] = [0x4E, 0x45, 0x53, 0x1A];
 pub const PRG_ROM_PAGE_SIZE: usize = 16384;
 pub const CHR_ROM_PAGE_SIZE: usize = 8192;
@@ -68,6 +70,89 @@ impl Mirroring {
             (Mirroring::Horizontal, 3) => vram_index - 0x800,
             _ => vram_index,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C, packed)]
+struct Header {
+    tag: [u8; 4],
+    prg_rom_lsb: u8,
+    chr_rom_lsb: u8,
+    flags: HeaderFlags,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
+struct HeaderFlags(u32);
+
+impl HeaderFlags {
+    pub fn mapper_id(self) -> u32 {
+        self.mapper_id_1() as u32
+            | ((self.mapper_id_2() as u32) << 4)
+            | ((self.mapper_id_3() as u32) << 8)
+    }
+}
+
+impl HeaderFlags {
+    #[inline(always)]
+    pub fn vertical_mirror(self) -> bool {
+        return (self.0 & 0b1) != 0;
+    }
+
+    #[inline(always)]
+    pub fn battery(self) -> bool {
+        return (self.0 & 0b10) != 0;
+    }
+
+    #[inline(always)]
+    pub fn trainer(self) -> bool {
+        return (self.0 & 0b100) != 0;
+    }
+
+    #[inline(always)]
+    pub fn four_screen(self) -> bool {
+        return (self.0 & 0b1000) != 0;
+    }
+
+    #[inline(always)]
+    pub fn mapper_id_1(self) -> u8 {
+        return ((self.0 >> 4) & 0xf) as u8;
+    }
+
+    #[inline(always)]
+    pub fn console_type(self) -> u8 {
+        return ((self.0 >> 8) & 0b11) as u8;
+    }
+
+    #[inline(always)]
+    pub fn format_identifier(self) -> u8 {
+        return ((self.0 >> 10) & 0b11) as u8;
+    }
+
+    #[inline(always)]
+    pub fn mapper_id_2(self) -> u8 {
+        return ((self.0 >> 12) & 0xf) as u8;
+    }
+
+    #[inline(always)]
+    pub fn mapper_id_3(self) -> u8 {
+        return ((self.0 >> 16) & 0xf) as u8;
+    }
+
+    #[inline(always)]
+    pub fn submapper_number(self) -> u8 {
+        return ((self.0 >> 20) & 0xf) as u8;
+    }
+
+    #[inline(always)]
+    pub fn prg_rom_msb(self) -> u8 {
+        return ((self.0 >> 24) & 0xf) as u8;
+    }
+
+    #[inline(always)]
+    pub fn chr_rom_msb(self) -> u8 {
+        return ((self.0 >> 28) & 0xf) as u8;
     }
 }
 

@@ -1,3 +1,5 @@
+use thiserror::Error;
+
 use self::{
     backend::{interpreter::Interpreter, Backend},
     flags::Flags,

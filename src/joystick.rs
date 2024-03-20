@@ -20,8 +20,8 @@ impl Joystick {
         right: KeyCode::ArrowRight,
         a: KeyCode::KeyA,
         b: KeyCode::KeyS,
-        select: KeyCode::KeyQ,
-        start: KeyCode::Escape,
+        select: KeyCode::Space,
+        start: KeyCode::Enter,
     };
 
     pub fn handle_input(&self, input: &WinitInputHelper) -> u8 {

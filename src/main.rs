@@ -1,3 +1,4 @@
+use color_eyre::eyre::Report;
 use emunes::{cartridge::Cartridge, joystick::Joystick, Nes};
 use std::{
     future::Future,
@@ -6,18 +7,26 @@ use std::{
     thread::Thread,
 };
 
-pub fn main() {
+pub fn main() -> color_eyre::Result<()> {
+    color_eyre::install().unwrap();
     simple_logger::SimpleLogger::new()
         .with_level(log::LevelFilter::Debug)
         .init()
         .unwrap();
 
-    block_on(async move {
-        let pacman = std::fs::read("Mega Man (USA).nes").unwrap();
-        let cartridge = Cartridge::new(&pacman).unwrap();
+    return block_on(async move {
+        let pacman = std::fs::read("Contra (USA).nes")?;
+        let cartridge = Cartridge::new(&pacman).map_err(color_eyre::Report::msg)?;
 
-        let nes = Nes::new(cartridge).await.unwrap();
-        nes.run(Joystick::ARROW, None).unwrap();
+        log::debug!("PRG ROM data: {} byte(s)", cartridge.prg_rom.len());
+        log::debug!("CHR ROM data: {} byte(s)", cartridge.chr_rom.len());
+        log::debug!("Mapper: {}", cartridge.mapper);
+        log::debug!("Mirroring: {:?}", cartridge.screen_mirroring);
+
+        let nes = Nes::new(cartridge).await?;
+        nes.run(Joystick::ARROW, None)
+            .map_err(|e| Report::msg(format!("{e:?}")))?;
+        return Ok(());
     });
 }
 
