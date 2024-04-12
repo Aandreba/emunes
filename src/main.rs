@@ -15,7 +15,7 @@ pub fn main() -> color_eyre::Result<()> {
         .unwrap();
 
     return block_on(async move {
-        let pacman = std::fs::read("Contra (USA).nes")?;
+        let pacman = std::fs::read("Bomberman (USA).nes")?;
         let cartridge = Cartridge::new(&pacman).map_err(color_eyre::Report::msg)?;
 
         log::debug!("PRG ROM data: {} byte(s)", cartridge.prg_rom.len());

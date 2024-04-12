@@ -1,12 +1,13 @@
-use thiserror::Error;
-
 use self::{
     backend::{interpreter::Interpreter, Backend},
     flags::Flags,
     instrs::{page_crossed, Addressing, Operand},
     memory::Memory,
 };
-use std::fmt::Debug;
+use std::{
+    fmt::Debug,
+    ops::{Deref, DerefMut},
+};
 
 pub mod backend;
 pub mod bcd;
@@ -15,29 +16,25 @@ pub mod instrs;
 pub mod memory;
 
 pub struct Cpu<M, B = Interpreter> {
-    pub accumulator: u8,
-    pub x: u8,
-    pub y: u8,
-    pub stack_ptr: u8,
-    pub flags: Flags,
-    pub decimal_enabled: bool,
+    pub state: State,
     pub memory: M,
     pub backend: B,
-    pub nmi_interrupt: bool,
 }
 
 impl<M, B> Cpu<M, B> {
     pub fn new(memory: M, backend: B) -> Self {
         return Self {
-            accumulator: 0,
-            x: 0,
-            y: 0,
-            stack_ptr: 0xfe,
-            flags: Flags::default(),
-            decimal_enabled: true,
+            state: State {
+                accumulator: 0,
+                x: 0,
+                y: 0,
+                stack_ptr: 0xfe,
+                flags: Flags::default(),
+                decimal_enabled: true,
+                nmi_interrupt: false,
+            },
             memory,
             backend,
-            nmi_interrupt: false,
         };
     }
 
@@ -157,6 +154,22 @@ impl<M: Memory, B: Backend> Cpu<M, B> {
     }
 }
 
+impl<M, B> Deref for Cpu<M, B> {
+    type Target = State;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl<M, B> DerefMut for Cpu<M, B> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
+    }
+}
+
 impl<M, B: Debug> Debug for Cpu<M, B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Cpu")
@@ -184,4 +197,15 @@ impl<M: Memory, B: Backend> Debug for RunError<M, B> {
             Self::UnknownOpcode(arg0) => f.debug_tuple("UnknownOpcode").field(arg0).finish(),
         }
     }
+}
+
+#[repr(C)]
+pub struct State {
+    pub accumulator: u8,
+    pub x: u8,
+    pub y: u8,
+    pub stack_ptr: u8,
+    pub flags: Flags,
+    pub decimal_enabled: bool,
+    pub nmi_interrupt: bool,
 }

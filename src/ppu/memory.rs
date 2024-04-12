@@ -15,9 +15,7 @@ pub struct Memory {
 // https://www.nesdev.org/wiki/PPU_memory_map
 impl Memory {
     pub fn new(chr_rom: Vec<u8>, mirror: crate::cartridge::Mirroring) -> Self {
-        panic!("{}", chr_rom.len());
         let mut rom = PatternTable::new(chr_rom).unwrap().into_iter();
-        panic!("{}", rom.len());
 
         return Self {
             left_table: rom.next().unwrap_or_default(),

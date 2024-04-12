@@ -56,7 +56,11 @@ impl Nes {
 
         let tick = |cpu: &mut Cpu<NesMemory, Interpreter>, cycles| {
             cpu.nmi_interrupt |= core::mem::replace(&mut cpu.memory.nmi_interrupt, false);
-            if cpu.memory.ppu.tick(&mut cpu.nmi_interrupt, 3 * cycles) {
+            if cpu
+                .memory
+                .ppu
+                .tick(&mut cpu.state.nmi_interrupt, 3 * cycles)
+            {
                 cpu.memory
                     .ppu
                     .render(&mut cpu.memory.video, &SYSTEM_PALETTE);

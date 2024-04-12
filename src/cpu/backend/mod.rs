@@ -3,7 +3,7 @@ use std::fmt::Debug;
 
 pub mod interpreter;
 // #[cfg(feature = "llvm")]
-// pub mod llvm;
+pub mod llvm;
 
 pub trait Backend: Sized {
     type Error: Debug;

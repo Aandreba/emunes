@@ -3,11 +3,10 @@ use emunes::cpu::{
     memory::{create_linear_memory, debug::DebugMemory, Memory},
     Cpu,
 };
-use inkwell::context::Context;
 
 #[test]
 fn interpreter() {
-    let h = flexi_logger::Logger::try_with_str("trace")
+    let h = flexi_logger::Logger::try_with_str("debug")
         .unwrap()
         .start()
         .unwrap();
@@ -20,7 +19,7 @@ fn interpreter() {
     memory.write_u8(0x3469, 0xff).unwrap();
 
     let mut cpu = Cpu::new(memory, Interpreter);
-    cpu.run(0x400, |_| {}).unwrap();
+    cpu.run(0x400, |_, _| {}).unwrap();
 
     h.flush();
     drop(h);
@@ -40,9 +39,8 @@ fn llvm() {
     // invalid opcode will make emulation terminate
     memory.write_u8(0x3469, 0xff).unwrap();
 
-    let cx = Context::create();
-    let mut cpu = Cpu::new(memory, Llvm::new(&cx).unwrap());
-    cpu.run(0x400, |_| {}).unwrap();
+    let mut cpu = Cpu::new(memory, Llvm::new());
+    cpu.run(0x400, |_, _| {}).unwrap();
 
     h.flush();
     drop(h);
