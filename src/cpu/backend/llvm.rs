@@ -1,7 +1,7 @@
 use super::Backend;
 use crate::cpu::{
     flags::Flag,
-    instrs::{Addressing, Instr, Operand},
+    instrs::{read_instruction, Addressing, Instr, Operand},
     memory::Memory,
     Cpu, RunError,
 };
@@ -12,6 +12,7 @@ use inkwell::{
     execution_engine::{ExecutionEngine, JitFunction},
     intrinsics::Intrinsic,
     module::Module,
+    passes::{PassManager, PassManagerBuilder},
     values::{AnyValue, CallableValue, FunctionValue, IntValue, PointerValue, VectorValue},
     AddressSpace, IntPredicate, OptimizationLevel,
 };
@@ -74,13 +75,49 @@ impl<'cx> Backend for Llvm<'cx> {
 
             loop {
                 pc = match backend.compiled.entry(pc) {
-                    Entry::Occupied(entry) => entry.into_mut().call(state, memory, &tick),
+                    Entry::Occupied(entry) => entry.into_mut(),
                     Entry::Vacant(entry) => {
-                        let mut builder = Builder::new(&backend.cx).map_err(RunError::Backend)?;
+                        let mut builder =
+                            Builder::new(pc, &backend.cx).map_err(RunError::Backend)?;
+                        let mut prev_cycles = 0;
+
+                        loop {
+                            let prev_pc = builder.pc;
+                            builder
+                                .build_tick(
+                                    builder.cx.i8_type().const_int(prev_cycles as u64, false),
+                                )
+                                .map_err(RunError::Backend)?;
+
+                            // TODO Handle NMI interrupt
+
+                            let Some(instr) = read_instruction(&mut *memory, &mut builder.pc)
+                                .map_err(RunError::Memory)?
+                            else {
+                                panic!(
+                                    "unknown instruction found at 0x{prev_pc:04X}: 0x{:02X}",
+                                    (&mut *memory).read_u8(prev_pc).unwrap()
+                                )
+                            };
+
+                            prev_cycles = instr.cycles();
+                            log::trace!("{prev_pc:04X}: {instr:04X?}");
+
+                            let is_terminating =
+                                builder.translate_instr(instr).map_err(RunError::Backend)?;
+
+                            if is_terminating {
+                                builder.flush().map_err(RunError::Backend)?;
+                                break;
+                            }
+                        }
+
+                        optimize_module(&builder.module);
                         builder.module.print_to_stderr();
-                        todo!()
+                        entry.insert(Compiled::new(builder.module))
                     }
                 }
+                .call(state, memory, &tick)
                 .map_err(RunError::Memory)?;
             }
         }
@@ -88,8 +125,15 @@ impl<'cx> Backend for Llvm<'cx> {
 }
 
 struct Builder<'cx> {
+    pc: u16,
     prev_state: State<'cx>,
+
     state_ptr: PointerValue<'cx>,
+    accumulator_ptr: PointerValue<'cx>,
+    x_ptr: PointerValue<'cx>,
+    y_ptr: PointerValue<'cx>,
+    stack_ptr_ptr: PointerValue<'cx>,
+    flags_ptr: PointerValue<'cx>,
 
     accumulator: IntValue<'cx>,
     x: IntValue<'cx>,
@@ -116,7 +160,7 @@ struct Builder<'cx> {
 }
 
 impl<'a> Builder<'a> {
-    pub fn new(cx: &'a Context) -> Result<Self, BuilderError> {
+    pub fn new(pc: u16, cx: &'a Context) -> Result<Self, BuilderError> {
         let module = cx.create_module("executable");
         let builder = cx.create_builder();
 
@@ -201,63 +245,47 @@ impl<'a> Builder<'a> {
         builder.position_at_end(entry_block);
 
         let state_ptr = fn_value.get_first_param().unwrap().into_pointer_value();
+        state_ptr.set_name("state_ptr");
+
         unsafe {
-            let accumulator = builder
-                .build_load(
-                    builder.build_gep(
-                        state_ptr,
-                        &[i64_type.const_int(ACC_OFFSET as u64, false)],
-                        "",
-                    )?,
-                    "",
-                )?
-                .into_int_value();
+            let accumulator_ptr = builder.build_gep(
+                state_ptr,
+                &[i64_type.const_int(ACC_OFFSET as u64, false)],
+                "accumulator_ptr",
+            )?;
 
-            let x = builder
-                .build_load(
-                    builder.build_gep(
-                        state_ptr,
-                        &[i64_type.const_int(X_OFFSET as u64, false)],
-                        "",
-                    )?,
-                    "",
-                )?
-                .into_int_value();
+            let x_ptr = builder.build_gep(
+                state_ptr,
+                &[i64_type.const_int(X_OFFSET as u64, false)],
+                "x_ptr",
+            )?;
 
-            let y = builder
-                .build_load(
-                    builder.build_gep(
-                        state_ptr,
-                        &[i64_type.const_int(Y_OFFSET as u64, false)],
-                        "",
-                    )?,
-                    "",
-                )?
-                .into_int_value();
+            let y_ptr = builder.build_gep(
+                state_ptr,
+                &[i64_type.const_int(Y_OFFSET as u64, false)],
+                "y_ptr",
+            )?;
 
-            let stack_ptr = builder
-                .build_load(
-                    builder.build_gep(
-                        state_ptr,
-                        &[i64_type.const_int(STACK_PTR_OFFSET as u64, false)],
-                        "",
-                    )?,
-                    "",
-                )?
-                .into_int_value();
+            let stack_ptr_ptr = builder.build_gep(
+                state_ptr,
+                &[i64_type.const_int(STACK_PTR_OFFSET as u64, false)],
+                "stack_ptr_ptr",
+            )?;
 
-            let flags = builder
-                .build_load(
-                    builder.build_gep(
-                        state_ptr,
-                        &[i64_type.const_int(FLAGS_OFFSET as u64, false)],
-                        "",
-                    )?,
-                    "",
-                )?
-                .into_int_value();
+            let flags_ptr = builder.build_gep(
+                state_ptr,
+                &[i64_type.const_int(FLAGS_OFFSET as u64, false)],
+                "flags_ptr",
+            )?;
+
+            let accumulator = builder.build_load(accumulator_ptr, "")?.into_int_value();
+            let x = builder.build_load(x_ptr, "")?.into_int_value();
+            let y = builder.build_load(y_ptr, "")?.into_int_value();
+            let stack_ptr = builder.build_load(stack_ptr_ptr, "")?.into_int_value();
+            let flags = builder.build_load(flags_ptr, "")?.into_int_value();
 
             let mut this = Self {
+                pc,
                 bswap: Intrinsic::find("llvm.bswap")
                     .unwrap()
                     .get_declaration(&module, &[i16_type.into()])
@@ -270,6 +298,11 @@ impl<'a> Builder<'a> {
                     flags: flags_type.get_poison(),
                 },
                 state_ptr,
+                accumulator_ptr,
+                x_ptr,
+                y_ptr,
+                stack_ptr_ptr,
+                flags_ptr,
                 accumulator,
                 x,
                 y,
@@ -289,6 +322,15 @@ impl<'a> Builder<'a> {
                 cx,
             };
 
+            this.tick_data_ptr.set_name("tick_data_ptr");
+            this.tick.set_name("ticks");
+            this.memory_data_ptr.set_name("memory_data_ptr");
+            this.memory_error_ptr.set_name("memory_error_ptr");
+            this.read_u8.set_name("read_u8");
+            this.read_u16.set_name("read_u16");
+            this.write_u8.set_name("write_u8");
+            this.write_u16.set_name("write_u16");
+
             this.flags_from_u8(flags)?;
             this.prev_state.flags = this.flags;
 
@@ -298,7 +340,7 @@ impl<'a> Builder<'a> {
 }
 
 impl<'a> Builder<'a> {
-    fn translate_instr(&mut self, instr: Instr) -> Result<(), BuilderError> {
+    fn translate_instr(&mut self, instr: Instr) -> Result<bool, BuilderError> {
         match instr {
             Instr::LDA(op) => {
                 let (op, page_crossed) = self.translate_operand(op)?;
@@ -367,44 +409,104 @@ impl<'a> Builder<'a> {
             Instr::CPX(_) => todo!(),
             Instr::CPY(_) => todo!(),
             Instr::INC(_) => todo!(),
-            Instr::INX => todo!(),
-            Instr::INY => todo!(),
+            Instr::INX => {
+                self.x = self.build_int_add(self.x, self.cx.i8_type().const_int(1, false), "")?;
+                self.set_nz(self.x)?;
+            }
+            Instr::INY => {
+                self.y = self.build_int_add(self.y, self.cx.i8_type().const_int(1, false), "")?;
+                self.set_nz(self.y)?;
+            }
             Instr::DEC(_) => todo!(),
-            Instr::DEX => todo!(),
-            Instr::DEY => todo!(),
+            Instr::DEX => {
+                self.x = self.build_int_sub(self.x, self.cx.i8_type().const_int(1, false), "")?;
+                self.set_nz(self.x)?;
+            }
+            Instr::DEY => {
+                self.x = self.build_int_sub(self.x, self.cx.i8_type().const_int(1, false), "")?;
+                self.set_nz(self.x)?;
+            }
             Instr::ASL(_) => todo!(),
             Instr::LSR(_) => todo!(),
             Instr::ROL(_) => todo!(),
             Instr::ROR(_) => todo!(),
-            Instr::JMP(_) => todo!(),
-            Instr::JMPIndirect(_) => todo!(),
-            Instr::JSR(_) => todo!(),
-            Instr::RTS => todo!(),
-            Instr::BCC(_) => todo!(),
-            Instr::BCS(_) => todo!(),
-            Instr::BEQ(_) => todo!(),
-            Instr::BMI(_) => todo!(),
-            Instr::BNE(_) => todo!(),
-            Instr::BPL(_) => todo!(),
-            Instr::BVC(_) => todo!(),
-            Instr::BVS(_) => todo!(),
-            Instr::CLC => todo!(),
-            Instr::CLD => todo!(),
-            Instr::CLI => todo!(),
-            Instr::CLV => todo!(),
-            Instr::SEC => todo!(),
-            Instr::SED => todo!(),
-            Instr::SEI => todo!(),
+            Instr::JMP(addr) => {
+                self.build_return(Some(&self.cx.i16_type().const_int(addr as u64, false)))?;
+                return Ok(true);
+            }
+            Instr::JMPIndirect(addr) => {
+                let next_pc =
+                    self.build_read_u16(self.cx.i16_type().const_int(addr as u64, false))?;
+                self.build_return(Some(&next_pc))?;
+                return Ok(true);
+            }
+            Instr::JSR(addr) => {
+                self.stack_push_u16(
+                    self.cx
+                        .i16_type()
+                        .const_int(self.pc.wrapping_sub(1) as u64, false),
+                )?;
+                self.build_return(Some(&self.cx.i16_type().const_int(addr as u64, false)))?;
+                return Ok(true);
+            }
+            Instr::RTS => {
+                let next_pc = self.stack_pop_u16()?;
+                self.build_return(Some(&self.build_int_add(
+                    next_pc,
+                    self.cx.i16_type().const_int(1, false),
+                    "",
+                )?))?;
+                return Ok(true);
+            }
+            Instr::BCC(addr) => self.build_conditional_jump(Flag::Carry, true, addr)?,
+            Instr::BCS(addr) => self.build_conditional_jump(Flag::Carry, false, addr)?,
+            Instr::BEQ(addr) => self.build_conditional_jump(Flag::Zero, false, addr)?,
+            Instr::BMI(addr) => self.build_conditional_jump(Flag::Negative, false, addr)?,
+            Instr::BNE(addr) => self.build_conditional_jump(Flag::Zero, true, addr)?,
+            Instr::BPL(addr) => self.build_conditional_jump(Flag::Negative, true, addr)?,
+            Instr::BVC(addr) => self.build_conditional_jump(Flag::Overflow, true, addr)?,
+            Instr::BVS(addr) => self.build_conditional_jump(Flag::Overflow, false, addr)?,
+            Instr::CLC => self.remove_flag(Flag::Carry)?,
+            Instr::CLD => self.remove_flag(Flag::Decimal)?,
+            Instr::CLI => self.remove_flag(Flag::InterruptDisable)?,
+            Instr::CLV => self.remove_flag(Flag::Overflow)?,
+            Instr::SEC => self.insert_flag(Flag::Carry)?,
+            Instr::SED => self.insert_flag(Flag::Decimal)?,
+            Instr::SEI => self.insert_flag(Flag::InterruptDisable)?,
             Instr::BRK => todo!(),
-            Instr::NOP => todo!(),
-            Instr::RTI => todo!(),
+            Instr::NOP => {}
+            Instr::RTI => {
+                let next_flags = self.stack_pop()?;
+                self.flags_from_u8(next_flags)?;
+
+                let next_pc = self.stack_pop_u16()?;
+                self.build_return(Some(&next_pc))?;
+                return Ok(true);
+            }
         };
-        return Ok(());
+        return Ok(false);
     }
 
     fn flush(&mut self) -> Result<(), BuilderError> {
         if self.accumulator != self.prev_state.accumulator {
-            todo!()
+            self.build_store(self.accumulator_ptr, self.accumulator)?;
+        }
+
+        if self.x != self.prev_state.x {
+            self.build_store(self.x_ptr, self.x)?;
+        }
+
+        if self.y != self.prev_state.y {
+            self.build_store(self.y_ptr, self.y)?;
+        }
+
+        if self.stack_ptr != self.prev_state.stack_ptr {
+            self.build_store(self.stack_ptr_ptr, self.stack_ptr)?;
+        }
+
+        if self.flags != self.prev_state.flags {
+            let flags = self.flags_into_u8(false)?;
+            self.build_store(self.flags_ptr, flags)?;
         }
 
         self.prev_state = State {
@@ -415,7 +517,7 @@ impl<'a> Builder<'a> {
             flags: self.flags,
         };
 
-        todo!()
+        return Ok(());
     }
 
     fn handle_page_cross(
@@ -435,8 +537,8 @@ impl<'a> Builder<'a> {
             builder.build_call(
                 CallableValue::try_from(self.tick).unwrap(),
                 &[
-                    self.tick_data_ptr.into(),
                     self.cx.i8_type().const_int(ticks as u64, false).into(),
+                    self.tick_data_ptr.into(),
                 ],
                 "",
             )?;
@@ -529,6 +631,49 @@ impl<'a> Builder<'a> {
 }
 
 impl<'a> Builder<'a> {
+    fn build_tick(&mut self, ticks: IntValue<'a>) -> Result<(), BuilderError> {
+        self.flush()?;
+        self.build_call(
+            CallableValue::try_from(self.tick).unwrap(),
+            &[ticks.into(), self.tick_data_ptr.into()],
+            "",
+        )?;
+        return Ok(());
+    }
+
+    fn build_conditional_jump(
+        &mut self,
+        flag: Flag,
+        cleared: bool,
+        addr: u16,
+    ) -> Result<(), BuilderError> {
+        let i8_type = self.cx.i8_type();
+        let i16_type = self.cx.i16_type();
+        let addr = i16_type.const_int(addr as u64, false);
+
+        let mut cond = self.get_flag(flag)?;
+        if cleared {
+            cond = self.build_not(cond, "")?;
+        }
+
+        let then_block = self.cx.append_basic_block(self.fn_value, "");
+        let continue_block = self.cx.append_basic_block(self.fn_value, "");
+        self.build_conditional_branch(cond, then_block, continue_block)?;
+
+        self.builder.position_at_end(then_block);
+        let page_crossed = self.page_crossed(i16_type.const_int(self.pc as u64, false), addr)?;
+        let ticks = self.build_int_add(
+            self.build_int_z_extend(page_crossed, i8_type, "")?,
+            i8_type.const_int(1, false),
+            "",
+        )?;
+        self.build_tick(ticks)?;
+        self.builder.build_return(Some(&addr))?;
+
+        self.builder.position_at_end(continue_block);
+        return Ok(());
+    }
+
     pub fn build_read_u8(&self, ptr: IntValue<'a>) -> Result<IntValue<'a>, BuilderError> {
         let output = self.build_alloca(self.cx.i8_type(), "")?;
         let res = self
@@ -753,7 +898,7 @@ impl<'a> Builder<'a> {
     }
 
     // http://wiki.nesdev.com/w/index.php/CPU_status_flag_behavior
-    pub fn flags_into_u8(self, from_interrupt: bool) -> Result<IntValue<'a>, BuilderError> {
+    pub fn flags_into_u8(&self, from_interrupt: bool) -> Result<IntValue<'a>, BuilderError> {
         let i8_type = self.cx.i8_type();
 
         let bits = self
@@ -943,4 +1088,14 @@ impl<'cx> Compiled<'cx> {
             None => Ok(next_pc),
         };
     }
+}
+
+fn optimize_module(module: &Module) -> bool {
+    let builder = PassManagerBuilder::create();
+    builder.set_optimization_level(OptimizationLevel::Default);
+
+    let manager = PassManager::create(());
+    builder.populate_module_pass_manager(&manager);
+
+    return manager.run_on(module);
 }
