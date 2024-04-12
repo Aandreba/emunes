@@ -17,7 +17,7 @@ use inkwell::{
 };
 use std::{
     cell::{Cell, UnsafeCell},
-    collections::HashMap,
+    collections::{hash_map::Entry, HashMap},
     ffi::c_void,
     mem::offset_of,
     ops::Deref,
@@ -64,12 +64,26 @@ impl<'cx> Backend for Llvm<'cx> {
         mut pc: u16,
         mut tick: impl FnMut(&mut Cpu<M, Self>, u8),
     ) -> Result<(), RunError<M, Self>> {
-        let cpu = unsafe { &*(cpu as *mut Cpu<M, Self> as *mut UnsafeCell<Cpu<M, Self>>) };
-        let tick = Closure::<dyn FnMut(u8)>::new(|x| unsafe { tick(&mut *cpu.get(), x) });
+        unsafe {
+            let cpu = &*(cpu as *mut Cpu<M, Self> as *mut UnsafeCell<Cpu<M, Self>>);
+            let tick = Closure::<dyn FnMut(u8)>::new(move |x| tick(&mut *cpu.get(), x));
 
-        loop {}
+            let state = std::ptr::addr_of_mut!((*cpu.get()).state);
+            let memory = std::ptr::addr_of_mut!((*cpu.get()).memory);
+            let backend = &mut (&mut *cpu.get()).backend;
 
-        todo!()
+            loop {
+                pc = match backend.compiled.entry(pc) {
+                    Entry::Occupied(entry) => entry.into_mut().call(state, memory, &tick),
+                    Entry::Vacant(entry) => {
+                        let mut builder = Builder::new(&backend.cx).map_err(RunError::Backend)?;
+                        builder.module.print_to_stderr();
+                        todo!()
+                    }
+                }
+                .map_err(RunError::Memory)?;
+            }
+        }
     }
 }
 
@@ -169,15 +183,15 @@ impl<'a> Builder<'a> {
 
         let fn_type = i16_type.fn_type(
             &[
-                i8_type.ptr_type(AddressSpace::default()).into(), // state_ptr
-                void_ptr_type.into(),                             // tick user_data
-                tick_fn_ptr_type.into(),                          // tick fn_ptr
-                void_ptr_type.into(),                             // memory user_data
-                void_ptr_type.into(),                             // memory error_ptr
-                read_u8_fn_ptr_type.into(),                       // memory read_u8
-                read_u16_fn_ptr_type.into(),                      // memory read_u16
-                write_u8_fn_ptr_type.into(),                      // memory write_u8
-                write_u16_fn_ptr_type.into(),                     // memory write_u16
+                i8_ptr_type.into(),           // state_ptr
+                void_ptr_type.into(),         // tick user_data
+                tick_fn_ptr_type.into(),      // tick fn_ptr
+                void_ptr_type.into(),         // memory user_data
+                void_ptr_type.into(),         // memory error_ptr
+                read_u8_fn_ptr_type.into(),   // memory read_u8
+                read_u16_fn_ptr_type.into(),  // memory read_u16
+                write_u8_fn_ptr_type.into(),  // memory write_u8
+                write_u16_fn_ptr_type.into(), // memory write_u16
             ],
             false,
         );
@@ -187,14 +201,12 @@ impl<'a> Builder<'a> {
         builder.position_at_end(entry_block);
 
         let state_ptr = fn_value.get_first_param().unwrap().into_pointer_value();
-        let zero = i64_type.const_zero();
-
         unsafe {
             let accumulator = builder
                 .build_load(
                     builder.build_gep(
                         state_ptr,
-                        &[zero, i64_type.const_int(ACC_OFFSET as u64, false)],
+                        &[i64_type.const_int(ACC_OFFSET as u64, false)],
                         "",
                     )?,
                     "",
@@ -205,7 +217,7 @@ impl<'a> Builder<'a> {
                 .build_load(
                     builder.build_gep(
                         state_ptr,
-                        &[zero, i64_type.const_int(X_OFFSET as u64, false)],
+                        &[i64_type.const_int(X_OFFSET as u64, false)],
                         "",
                     )?,
                     "",
@@ -216,7 +228,7 @@ impl<'a> Builder<'a> {
                 .build_load(
                     builder.build_gep(
                         state_ptr,
-                        &[zero, i64_type.const_int(Y_OFFSET as u64, false)],
+                        &[i64_type.const_int(Y_OFFSET as u64, false)],
                         "",
                     )?,
                     "",
@@ -227,7 +239,7 @@ impl<'a> Builder<'a> {
                 .build_load(
                     builder.build_gep(
                         state_ptr,
-                        &[zero, i64_type.const_int(STACK_PTR_OFFSET as u64, false)],
+                        &[i64_type.const_int(STACK_PTR_OFFSET as u64, false)],
                         "",
                     )?,
                     "",
@@ -238,7 +250,7 @@ impl<'a> Builder<'a> {
                 .build_load(
                     builder.build_gep(
                         state_ptr,
-                        &[zero, i64_type.const_int(FLAGS_OFFSET as u64, false)],
+                        &[i64_type.const_int(FLAGS_OFFSET as u64, false)],
                         "",
                     )?,
                     "",
@@ -907,11 +919,11 @@ impl<'cx> Compiled<'cx> {
     }
 
     #[inline]
-    pub unsafe fn call<M: Memory>(
+    pub unsafe fn call<'a, M: Memory>(
         &mut self,
-        state: &mut crate::cpu::State,
-        memory: &mut M,
-        tick: &Closure<dyn FnMut(u8)>,
+        state: *mut crate::cpu::State,
+        memory: *mut M,
+        tick: &Closure<dyn 'a + FnMut(u8)>,
     ) -> Result<u16, M::Error> {
         let last_memory_error = Cell::new(None::<M::Error>);
         let next_pc = self.f.call(
