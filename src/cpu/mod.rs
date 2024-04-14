@@ -199,6 +199,7 @@ impl<M: Memory, B: Backend> Debug for RunError<M, B> {
     }
 }
 
+#[derive(Debug, Clone)]
 #[repr(C)]
 pub struct State {
     pub accumulator: u8,

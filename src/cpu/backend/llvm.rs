@@ -5,15 +5,19 @@ use crate::cpu::{
     memory::Memory,
     Cpu, RunError,
 };
+use bitvec::prelude::*;
 use ffi_closure::Closure;
 use inkwell::{
     builder::BuilderError,
     context::Context,
     execution_engine::{ExecutionEngine, JitFunction},
-    intrinsics::Intrinsic,
+    memory_buffer::MemoryBuffer,
     module::Module,
     passes::{PassManager, PassManagerBuilder},
-    values::{AnyValue, CallableValue, FunctionValue, IntValue, PointerValue, VectorValue},
+    types::StructType,
+    values::{
+        AnyValue, CallableValue, FunctionValue, IntValue, PointerValue, StructValue, VectorValue,
+    },
     AddressSpace, IntPredicate, OptimizationLevel,
 };
 use std::{
@@ -34,8 +38,12 @@ type Function = unsafe extern "C" fn(
     unsafe extern "C" fn(*mut c_void, *const c_void, u16, *mut u16) -> i8, // memory read_u16
     unsafe extern "C" fn(*mut c_void, *const c_void, u16, u8) -> i8, // memory write_u8
     unsafe extern "C" fn(*mut c_void, *const c_void, u16, u16) -> i8, // memory write_u16
+    *mut u8,                               // prev cycles
 ) -> u16;
 
+type CodeRegionArray = BitArr!(for 0x10000);
+
+const SKELETON: &str = include_str!("../../../skeleton.ll");
 const FUNTION_NAME: &str = "main";
 const ACC_OFFSET: usize = offset_of!(crate::cpu::State, accumulator);
 const X_OFFSET: usize = offset_of!(crate::cpu::State, x);
@@ -45,6 +53,7 @@ const FLAGS_OFFSET: usize = offset_of!(crate::cpu::State, flags);
 
 pub struct Llvm<'cx> {
     compiled: HashMap<u16, Compiled<'cx>>,
+    code_regions: CodeRegionArray,
     cx: Context,
 }
 
@@ -52,6 +61,7 @@ impl<'cx> Llvm<'cx> {
     pub fn new() -> Self {
         return Self {
             cx: Context::create(),
+            code_regions: CodeRegionArray::ZERO,
             compiled: HashMap::new(),
         };
     }
@@ -73,21 +83,31 @@ impl<'cx> Backend for Llvm<'cx> {
             let memory = std::ptr::addr_of_mut!((*cpu.get()).memory);
             let backend = &mut (&mut *cpu.get()).backend;
 
+            let mut prev_pc = None;
+            let mut prev_cycles = 0;
             loop {
-                pc = match backend.compiled.entry(pc) {
+                #[cfg(debug_assertions)]
+                if prev_pc.is_some_and(|prev| prev == pc) {
+                    panic!("Infinite loop detected at 0x{pc:X}")
+                }
+
+                log::debug!("Next PC: 0x{pc:X}\n{:?}", &*state);
+                prev_pc = Some(pc);
+                let (next_pc, clear_code_cache) = match backend.compiled.entry(pc) {
                     Entry::Occupied(entry) => entry.into_mut(),
                     Entry::Vacant(entry) => {
                         let mut builder =
                             Builder::new(pc, &backend.cx).map_err(RunError::Backend)?;
-                        let mut prev_cycles = 0;
 
+                        let mut prev_cycles = builder
+                            .build_load(builder.prev_cycles, "")
+                            .map_err(RunError::Backend)?
+                            .into_int_value();
+
+                        let start_pc = builder.pc as usize;
                         loop {
                             let prev_pc = builder.pc;
-                            builder
-                                .build_tick(
-                                    builder.cx.i8_type().const_int(prev_cycles as u64, false),
-                                )
-                                .map_err(RunError::Backend)?;
+                            builder.build_tick(prev_cycles).map_err(RunError::Backend)?;
 
                             // TODO Handle NMI interrupt
 
@@ -100,25 +120,41 @@ impl<'cx> Backend for Llvm<'cx> {
                                 )
                             };
 
-                            prev_cycles = instr.cycles();
+                            prev_cycles =
+                                builder.cx.i8_type().const_int(instr.cycles() as u64, false);
                             log::trace!("{prev_pc:04X}: {instr:04X?}");
 
                             let is_terminating =
                                 builder.translate_instr(instr).map_err(RunError::Backend)?;
 
                             if is_terminating {
-                                builder.flush().map_err(RunError::Backend)?;
                                 break;
                             }
                         }
+                        let end_pc = builder.pc as usize;
 
+                        backend.code_regions[start_pc..end_pc].fill(true);
                         optimize_module(&builder.module);
-                        builder.module.print_to_stderr();
+                        // builder.fn_value.print_to_stderr();
                         entry.insert(Compiled::new(builder.module))
                     }
                 }
-                .call(state, memory, &tick)
+                .call(
+                    state,
+                    memory,
+                    &tick,
+                    &backend.code_regions,
+                    &mut prev_cycles,
+                )
                 .map_err(RunError::Memory)?;
+
+                if clear_code_cache {
+                    log::debug!("Found self-modifying code, clearing code cache");
+                    backend.compiled.clear();
+                    backend.code_regions.fill(false);
+                }
+
+                pc = next_pc
             }
         }
     }
@@ -140,6 +176,7 @@ struct Builder<'cx> {
     y: IntValue<'cx>,
     stack_ptr: IntValue<'cx>,
     flags: VectorValue<'cx>,
+    prev_cycles: PointerValue<'cx>,
 
     memory_data_ptr: PointerValue<'cx>,
     memory_error_ptr: PointerValue<'cx>,
@@ -151,7 +188,11 @@ struct Builder<'cx> {
     tick_data_ptr: PointerValue<'cx>,
     tick: PointerValue<'cx>,
 
+    #[cfg(target_endian = "big")]
     bswap: FunctionValue<'cx>,
+    adc: FunctionValue<'cx>,
+    sbc: FunctionValue<'cx>,
+    adc_output_type: StructType<'cx>,
 
     fn_value: FunctionValue<'cx>,
     builder: inkwell::builder::Builder<'cx>,
@@ -161,7 +202,12 @@ struct Builder<'cx> {
 
 impl<'a> Builder<'a> {
     pub fn new(pc: u16, cx: &'a Context) -> Result<Self, BuilderError> {
-        let module = cx.create_module("executable");
+        let module = cx
+            .create_module_from_ir(MemoryBuffer::create_from_memory_range_copy(
+                SKELETON.trim_end().as_bytes(),
+                "skeleton",
+            ))
+            .unwrap();
         let builder = cx.create_builder();
 
         let i8_type = cx.i8_type();
@@ -236,10 +282,11 @@ impl<'a> Builder<'a> {
                 read_u16_fn_ptr_type.into(),  // memory read_u16
                 write_u8_fn_ptr_type.into(),  // memory write_u8
                 write_u16_fn_ptr_type.into(), // memory write_u16
+                i8_ptr_type.into(),           // prev_cycles
             ],
             false,
         );
-        let fn_value = module.add_function("main", fn_type, None);
+        let fn_value = module.add_function(FUNTION_NAME, fn_type, None);
 
         let entry_block = cx.append_basic_block(fn_value, "entry");
         builder.position_at_end(entry_block);
@@ -286,10 +333,14 @@ impl<'a> Builder<'a> {
 
             let mut this = Self {
                 pc,
+                #[cfg(target_endian = "big")]
                 bswap: Intrinsic::find("llvm.bswap")
                     .unwrap()
                     .get_declaration(&module, &[i16_type.into()])
                     .unwrap(),
+                adc: module.get_function("adc").unwrap(),
+                sbc: module.get_function("sbc").unwrap(),
+                adc_output_type: module.get_struct_type("AdcOutput").unwrap(),
                 prev_state: State {
                     accumulator,
                     x,
@@ -316,6 +367,7 @@ impl<'a> Builder<'a> {
                 read_u16: fn_value.get_nth_param(6).unwrap().into_pointer_value(),
                 write_u8: fn_value.get_nth_param(7).unwrap().into_pointer_value(),
                 write_u16: fn_value.get_nth_param(8).unwrap().into_pointer_value(),
+                prev_cycles: fn_value.get_nth_param(9).unwrap().into_pointer_value(),
                 fn_value,
                 builder,
                 module,
@@ -330,6 +382,7 @@ impl<'a> Builder<'a> {
             this.read_u16.set_name("read_u16");
             this.write_u8.set_name("write_u8");
             this.write_u16.set_name("write_u16");
+            this.prev_cycles.set_name("prev_cycles");
 
             this.flags_from_u8(flags)?;
             this.prev_state.flags = this.flags;
@@ -341,6 +394,7 @@ impl<'a> Builder<'a> {
 
 impl<'a> Builder<'a> {
     fn translate_instr(&mut self, instr: Instr) -> Result<bool, BuilderError> {
+        let cycles = instr.cycles();
         match instr {
             Instr::LDA(op) => {
                 let (op, page_crossed) = self.translate_operand(op)?;
@@ -362,15 +416,15 @@ impl<'a> Builder<'a> {
             }
             Instr::STA(addr) => {
                 let (addr, _) = self.translate_address(addr)?;
-                self.build_write_u8(addr, self.accumulator)?;
+                self.build_write_u8(addr, self.accumulator, cycles)?;
             }
             Instr::STX(addr) => {
                 let (addr, _) = self.translate_address(addr)?;
-                self.build_write_u8(addr, self.x)?;
+                self.build_write_u8(addr, self.x, cycles)?;
             }
             Instr::STY(addr) => {
                 let (addr, _) = self.translate_address(addr)?;
-                self.build_write_u8(addr, self.y)?;
+                self.build_write_u8(addr, self.y, cycles)?;
             }
             Instr::TAX => {
                 self.x = self.accumulator;
@@ -399,15 +453,134 @@ impl<'a> Builder<'a> {
             Instr::PHP => todo!(),
             Instr::PLA => todo!(),
             Instr::PLP => todo!(),
-            Instr::AND(_) => todo!(),
-            Instr::EOR(_) => todo!(),
-            Instr::ORA(_) => todo!(),
+            Instr::AND(op) => {
+                let (op, page_crossed) = self.translate_operand(op)?;
+                self.accumulator = self.build_and(self.accumulator, op, "")?;
+                self.set_nz(self.accumulator)?;
+                self.handle_page_cross(page_crossed, 1)?;
+            }
+            Instr::EOR(op) => {
+                let (op, page_crossed) = self.translate_operand(op)?;
+                self.accumulator = self.build_xor(self.accumulator, op, "")?;
+                self.set_nz(self.accumulator)?;
+                self.handle_page_cross(page_crossed, 1)?;
+            }
+            Instr::ORA(op) => {
+                let (op, page_crossed) = self.translate_operand(op)?;
+                self.accumulator = self.build_or(self.accumulator, op, "")?;
+                self.set_nz(self.accumulator)?;
+                self.handle_page_cross(page_crossed, 1)?;
+            }
             Instr::BIT(_) => todo!(),
-            Instr::ADC(_) => todo!(),
-            Instr::SBC(_) => todo!(),
-            Instr::CMP(_) => todo!(),
-            Instr::CPX(_) => todo!(),
-            Instr::CPY(_) => todo!(),
+            Instr::ADC(op) => {
+                let (op, page_crossed) = self.translate_operand(op)?;
+
+                let lhs = self.accumulator;
+                let rhs = op;
+                let carry = self.get_flag(Flag::Carry)?;
+                let decimal = self.get_flag(Flag::Decimal)?; // TODO disable_decimal flag
+                let output = self.build_alloca(self.adc_output_type, "")?;
+
+                self.build_call(
+                    self.adc,
+                    &[
+                        lhs.into(),
+                        rhs.into(),
+                        carry.into(),
+                        decimal.into(),
+                        output.into(),
+                    ],
+                    "",
+                )?;
+
+                let output = self.build_load(output, "")?.into_struct_value();
+                self.accumulator = self.build_extract_value(output, 0, "")?.into_int_value();
+                self.set_flag(Flag::Carry, self.extract_adc_bit(output, 1)?)?;
+                self.set_flag(
+                    Flag::Overflow,
+                    self.build_select(
+                        self.extract_adc_bit(output, 5)?,
+                        self.extract_adc_bit(output, 2)?,
+                        self.get_flag(Flag::Overflow)?,
+                        "",
+                    )?
+                    .into_int_value(),
+                )?;
+                self.set_flag(Flag::Zero, self.extract_adc_bit(output, 3)?)?;
+                self.set_flag(Flag::Negative, self.extract_adc_bit(output, 4)?)?;
+
+                self.handle_page_cross(page_crossed, 1)?;
+            }
+            Instr::SBC(op) => {
+                let (op, page_crossed) = self.translate_operand(op)?;
+
+                let lhs = self.accumulator;
+                let rhs = op;
+                let carry = self.get_flag(Flag::Carry)?;
+                let decimal = self.get_flag(Flag::Decimal)?; // TODO disable_decimal flag
+                let output = self.build_alloca(self.adc_output_type, "")?;
+
+                self.build_call(
+                    self.sbc,
+                    &[
+                        lhs.into(),
+                        rhs.into(),
+                        carry.into(),
+                        decimal.into(),
+                        output.into(),
+                    ],
+                    "",
+                )?;
+
+                let output = self.build_load(output, "")?.into_struct_value();
+                self.accumulator = self.build_extract_value(output, 0, "")?.into_int_value();
+                self.set_flag(Flag::Carry, self.extract_adc_bit(output, 1)?)?;
+                self.set_flag(
+                    Flag::Overflow,
+                    self.build_select(
+                        self.extract_adc_bit(output, 5)?,
+                        self.extract_adc_bit(output, 2)?,
+                        self.get_flag(Flag::Overflow)?,
+                        "",
+                    )?
+                    .into_int_value(),
+                )?;
+                self.set_flag(Flag::Zero, self.extract_adc_bit(output, 3)?)?;
+                self.set_flag(Flag::Negative, self.extract_adc_bit(output, 4)?)?;
+
+                self.handle_page_cross(page_crossed, 1)?;
+            }
+            Instr::CMP(op) => {
+                let (op, page_crossed) = self.translate_operand(op)?;
+                let ge = self.build_int_compare(IntPredicate::UGE, self.accumulator, op, "")?;
+                let eq = self.build_int_compare(IntPredicate::EQ, self.accumulator, op, "")?;
+                let lt = self.build_int_compare(IntPredicate::ULT, self.accumulator, op, "")?;
+
+                self.set_flag(Flag::Carry, ge)?;
+                self.set_flag(Flag::Zero, eq)?;
+                self.set_flag(Flag::Negative, lt)?;
+                self.handle_page_cross(page_crossed, 1)?;
+            }
+            Instr::CPX(op) => {
+                let (op, _) = self.translate_operand(op)?;
+                let ge = self.build_int_compare(IntPredicate::UGE, self.x, op, "")?;
+                let eq = self.build_int_compare(IntPredicate::EQ, self.x, op, "")?;
+                let lt = self.build_int_compare(IntPredicate::ULT, self.x, op, "")?;
+
+                self.set_flag(Flag::Carry, ge)?;
+                self.set_flag(Flag::Zero, eq)?;
+                self.set_flag(Flag::Negative, lt)?;
+            }
+            Instr::CPY(op) => {
+                let (op, _) = self.translate_operand(op)?;
+                let ge = self.build_int_compare(IntPredicate::UGE, self.y, op, "")?;
+                let eq = self.build_int_compare(IntPredicate::EQ, self.y, op, "")?;
+                let lt = self.build_int_compare(IntPredicate::ULT, self.y, op, "")?;
+
+                self.set_flag(Flag::Carry, ge)?;
+                self.set_flag(Flag::Zero, eq)?;
+                self.set_flag(Flag::Negative, lt)?;
+            }
             Instr::INC(_) => todo!(),
             Instr::INX => {
                 self.x = self.build_int_add(self.x, self.cx.i8_type().const_int(1, false), "")?;
@@ -423,21 +596,20 @@ impl<'a> Builder<'a> {
                 self.set_nz(self.x)?;
             }
             Instr::DEY => {
-                self.x = self.build_int_sub(self.x, self.cx.i8_type().const_int(1, false), "")?;
-                self.set_nz(self.x)?;
+                self.y = self.build_int_sub(self.y, self.cx.i8_type().const_int(1, false), "")?;
+                self.set_nz(self.y)?;
             }
             Instr::ASL(_) => todo!(),
             Instr::LSR(_) => todo!(),
             Instr::ROL(_) => todo!(),
             Instr::ROR(_) => todo!(),
             Instr::JMP(addr) => {
-                self.build_return(Some(&self.cx.i16_type().const_int(addr as u64, false)))?;
-                return Ok(true);
+                return self.build_jump(self.cx.i16_type().const_int(addr as u64, false), cycles);
             }
             Instr::JMPIndirect(addr) => {
                 let next_pc =
-                    self.build_read_u16(self.cx.i16_type().const_int(addr as u64, false))?;
-                self.build_return(Some(&next_pc))?;
+                    self.build_read_u16(self.cx.i16_type().const_int(addr as u64, false), cycles)?;
+                self.build_jump(next_pc, cycles)?;
                 return Ok(true);
             }
             Instr::JSR(addr) => {
@@ -446,16 +618,15 @@ impl<'a> Builder<'a> {
                         .i16_type()
                         .const_int(self.pc.wrapping_sub(1) as u64, false),
                 )?;
-                self.build_return(Some(&self.cx.i16_type().const_int(addr as u64, false)))?;
+                self.build_jump(self.cx.i16_type().const_int(addr as u64, false), cycles)?;
                 return Ok(true);
             }
             Instr::RTS => {
                 let next_pc = self.stack_pop_u16()?;
-                self.build_return(Some(&self.build_int_add(
-                    next_pc,
-                    self.cx.i16_type().const_int(1, false),
-                    "",
-                )?))?;
+                self.build_jump(
+                    self.build_int_add(next_pc, self.cx.i16_type().const_int(1, false), "")?,
+                    cycles,
+                )?;
                 return Ok(true);
             }
             Instr::BCC(addr) => self.build_conditional_jump(Flag::Carry, true, addr)?,
@@ -480,7 +651,7 @@ impl<'a> Builder<'a> {
                 self.flags_from_u8(next_flags)?;
 
                 let next_pc = self.stack_pop_u16()?;
-                self.build_return(Some(&next_pc))?;
+                self.build_jump(next_pc, cycles)?;
                 return Ok(true);
             }
         };
@@ -559,7 +730,7 @@ impl<'a> Builder<'a> {
             Operand::Immediate(imm) => (self.cx.i8_type().const_int(imm as u64, false), None),
             Operand::Addressing(addr) => {
                 let (addr, page_crossed) = self.translate_address(addr)?;
-                (self.build_read_u8(addr)?, page_crossed)
+                (self.build_read_u8(addr, 0)?, page_crossed)
             }
         });
     }
@@ -606,10 +777,10 @@ impl<'a> Builder<'a> {
             Addressing::IndexedIndirect(base) => {
                 let subptr =
                     self.build_int_add(i8_type.const_int(base as u64, false), self.x, "")?;
-                (self.build_read_u16(subptr)?, None)
+                (self.build_read_u16(subptr, 0)?, None)
             }
             Addressing::IndirectIndexed(base) => {
-                let base = self.build_read_u16(i16_type.const_int(base as u64, false))?;
+                let base = self.build_read_u16(i16_type.const_int(base as u64, false), 0)?;
                 let addr = self.build_int_add(base, self.y, "")?;
                 (addr, Some(self.page_crossed(base, addr)?))
             }
@@ -674,7 +845,21 @@ impl<'a> Builder<'a> {
         return Ok(());
     }
 
-    pub fn build_read_u8(&self, ptr: IntValue<'a>) -> Result<IntValue<'a>, BuilderError> {
+    fn build_jump(&mut self, addr: IntValue<'a>, cycles: u8) -> Result<bool, BuilderError> {
+        self.flush()?;
+        self.build_store(
+            self.prev_cycles,
+            self.cx.i8_type().const_int(cycles as u64, false),
+        )?;
+        self.build_return(Some(&addr))?;
+        return Ok(true);
+    }
+
+    pub fn build_read_u8(
+        &mut self,
+        ptr: IntValue<'a>,
+        cycles: u8,
+    ) -> Result<IntValue<'a>, BuilderError> {
         let output = self.build_alloca(self.cx.i8_type(), "")?;
         let res = self
             .build_call(
@@ -690,11 +875,15 @@ impl<'a> Builder<'a> {
             .as_any_value_enum()
             .into_int_value();
 
-        self.handle_memory_result(res)?;
+        self.handle_memory_result(res, cycles)?;
         return Ok(self.build_load(output, "")?.into_int_value());
     }
 
-    pub fn build_read_u16(&self, ptr: IntValue<'a>) -> Result<IntValue<'a>, BuilderError> {
+    pub fn build_read_u16(
+        &mut self,
+        ptr: IntValue<'a>,
+        cycles: u8,
+    ) -> Result<IntValue<'a>, BuilderError> {
         let output = self.build_alloca(self.cx.i16_type(), "")?;
         let res = self
             .build_call(
@@ -710,11 +899,16 @@ impl<'a> Builder<'a> {
             .as_any_value_enum()
             .into_int_value();
 
-        self.handle_memory_result(res)?;
+        self.handle_memory_result(res, cycles)?;
         return Ok(self.build_load(output, "")?.into_int_value());
     }
 
-    pub fn build_write_u8(&self, ptr: IntValue<'a>, val: IntValue<'a>) -> Result<(), BuilderError> {
+    pub fn build_write_u8(
+        &mut self,
+        ptr: IntValue<'a>,
+        val: IntValue<'a>,
+        cycles: u8,
+    ) -> Result<(), BuilderError> {
         let res = self
             .build_call(
                 CallableValue::try_from(self.write_u8).unwrap(),
@@ -729,13 +923,14 @@ impl<'a> Builder<'a> {
             .as_any_value_enum()
             .into_int_value();
 
-        return self.handle_memory_result(res);
+        return self.handle_memory_result(res, cycles);
     }
 
     pub fn build_write_u16(
-        &self,
+        &mut self,
         ptr: IntValue<'a>,
         val: IntValue<'a>,
+        cycles: u8,
     ) -> Result<(), BuilderError> {
         let res = self
             .build_call(
@@ -751,9 +946,10 @@ impl<'a> Builder<'a> {
             .as_any_value_enum()
             .into_int_value();
 
-        return self.handle_memory_result(res);
+        return self.handle_memory_result(res, cycles);
     }
 
+    #[cfg(target_endian = "big")]
     pub fn build_bswap(&self, val: IntValue<'a>) -> Result<IntValue<'a>, BuilderError> {
         return Ok(self
             .build_call(self.bswap, &[val.into()], "")?
@@ -806,7 +1002,16 @@ impl<'a> Builder<'a> {
         return self.build_to_le(int);
     }
 
-    fn handle_memory_result(&self, res: IntValue<'a>) -> Result<(), BuilderError> {
+    fn extract_adc_bit(
+        &self,
+        adc: StructValue<'a>,
+        index: u32,
+    ) -> Result<IntValue<'a>, BuilderError> {
+        let byte = self.build_extract_value(adc, index, "")?.into_int_value();
+        return self.build_int_truncate(byte, self.cx.bool_type(), "");
+    }
+
+    fn handle_memory_result(&mut self, res: IntValue<'a>, cycles: u8) -> Result<(), BuilderError> {
         let condition =
             self.build_int_compare(IntPredicate::SLT, res, self.cx.i8_type().const_zero(), "")?;
 
@@ -814,9 +1019,9 @@ impl<'a> Builder<'a> {
         let continue_block = self.cx.append_basic_block(self.fn_value, "");
         self.build_conditional_branch(condition, then_block, continue_block)?;
 
-        let builder = self.cx.create_builder();
-        builder.position_at_end(then_block);
-        builder.build_return(Some(&self.cx.i16_type().get_poison()))?;
+        self.builder.position_at_end(then_block);
+        // return next pc, perhaps the error is just a code cache invalidation
+        self.build_jump(self.cx.i16_type().const_int(self.pc as u64, false), cycles)?;
 
         self.builder.position_at_end(continue_block);
         return Ok(());
@@ -941,7 +1146,7 @@ impl<'a> Builder<'a> {
 // Stack Ops
 impl<'a> Builder<'a> {
     pub fn stack_push(&mut self, val: IntValue<'a>) -> Result<(), BuilderError> {
-        self.build_write_u8(self.stack_addr()?, val)?;
+        self.build_write_u8(self.stack_addr()?, val, 0)?; // TODO may need to set cycles
         self.stack_ptr =
             self.build_int_sub(self.stack_ptr, self.cx.i8_type().const_int(1, false), "")?;
         return Ok(());
@@ -957,7 +1162,7 @@ impl<'a> Builder<'a> {
     pub fn stack_pop(&mut self) -> Result<IntValue<'a>, BuilderError> {
         self.stack_ptr =
             self.build_int_add(self.stack_ptr, self.cx.i8_type().const_int(1, false), "")?;
-        return self.build_read_u8(self.stack_addr()?);
+        return self.build_read_u8(self.stack_addr()?, 0); // TODO may need to set cycles
     }
 
     pub fn stack_pop_u16(&mut self) -> Result<IntValue<'a>, BuilderError> {
@@ -978,17 +1183,18 @@ impl<'a> Builder<'a> {
 
 unsafe extern "C" fn read_u8<M: Memory>(
     memory: *mut c_void,
-    latest_error: *const c_void,
+    info: *const c_void,
     addr: u16,
     dst: *mut u8,
 ) -> i8 {
+    let info = &*info.cast::<MemoryInfo<M>>();
     match (&mut *memory.cast::<M>()).read_u8(addr) {
         Ok(res) => {
             *dst = res;
             return 0;
         }
         Err(e) => {
-            (&*latest_error.cast::<Cell<Option<M::Error>>>()).set(Some(e));
+            info.set_error(e);
             return -1;
         }
     }
@@ -996,17 +1202,18 @@ unsafe extern "C" fn read_u8<M: Memory>(
 
 unsafe extern "C" fn read_u16<M: Memory>(
     memory: *mut c_void,
-    latest_error: *const c_void,
+    info: *const c_void,
     addr: u16,
     dst: *mut u16,
 ) -> i8 {
+    let info = &*info.cast::<MemoryInfo<M>>();
     match (&mut *memory.cast::<M>()).read_u16(addr) {
         Ok(res) => {
             *dst = res;
             return 0;
         }
         Err(e) => {
-            (&*latest_error.cast::<Cell<Option<M::Error>>>()).set(Some(e));
+            info.set_error(e);
             return -1;
         }
     }
@@ -1014,16 +1221,15 @@ unsafe extern "C" fn read_u16<M: Memory>(
 
 unsafe extern "C" fn write_u8<M: Memory>(
     memory: *mut c_void,
-    latest_error: *const c_void,
+    info: *const c_void,
     addr: u16,
     val: u8,
 ) -> i8 {
+    let info = &*info.cast::<MemoryInfo<M>>();
     match (&mut *memory.cast::<M>()).write_u8(addr, val) {
-        Ok(()) => {
-            return 0;
-        }
+        Ok(()) => return info.check_code_region(addr),
         Err(e) => {
-            (&*latest_error.cast::<Cell<Option<M::Error>>>()).set(Some(e));
+            info.set_error(e);
             return -1;
         }
     }
@@ -1031,16 +1237,15 @@ unsafe extern "C" fn write_u8<M: Memory>(
 
 unsafe extern "C" fn write_u16<M: Memory>(
     memory: *mut c_void,
-    latest_error: *const c_void,
+    info: *const c_void,
     addr: u16,
     val: u16,
 ) -> i8 {
+    let info = &*info.cast::<MemoryInfo<M>>();
     match (&mut *memory.cast::<M>()).write_u16(addr, val) {
-        Ok(()) => {
-            return 0;
-        }
+        Ok(()) => return info.check_code_region(addr) | info.check_code_region(addr + 1),
         Err(e) => {
-            (&*latest_error.cast::<Cell<Option<M::Error>>>()).set(Some(e));
+            info.set_error(e);
             return -1;
         }
     }
@@ -1069,23 +1274,31 @@ impl<'cx> Compiled<'cx> {
         state: *mut crate::cpu::State,
         memory: *mut M,
         tick: &Closure<dyn 'a + FnMut(u8)>,
-    ) -> Result<u16, M::Error> {
-        let last_memory_error = Cell::new(None::<M::Error>);
+        code_regions: &CodeRegionArray,
+        prev_cycles: &mut u8,
+    ) -> Result<(u16, bool), M::Error> {
+        let info = MemoryInfo::<M> {
+            code_regions,
+            latest_error: Cell::new(None::<M::Error>),
+            clear_code_cache: Cell::new(false),
+        };
+
         let next_pc = self.f.call(
             state,
             tick.user_data(),
             tick.fn_ptr(),
             memory as *mut M as *mut c_void,
-            std::ptr::addr_of!(last_memory_error).cast(),
+            std::ptr::addr_of!(info).cast(),
             read_u8::<M>,
             read_u16::<M>,
             write_u8::<M>,
             write_u16::<M>,
+            prev_cycles,
         );
 
-        return match last_memory_error.take() {
+        return match info.latest_error.take() {
             Some(err) => Err(err),
-            None => Ok(next_pc),
+            None => Ok((next_pc, info.clear_code_cache.get())),
         };
     }
 }
@@ -1098,4 +1311,25 @@ fn optimize_module(module: &Module) -> bool {
     builder.populate_module_pass_manager(&manager);
 
     return manager.run_on(module);
+}
+
+struct MemoryInfo<'a, M: Memory> {
+    code_regions: &'a CodeRegionArray,
+    latest_error: Cell<Option<M::Error>>,
+    clear_code_cache: Cell<bool>,
+}
+
+impl<'a, M: Memory> MemoryInfo<'a, M> {
+    pub fn set_error(&self, err: M::Error) {
+        self.latest_error.set(Some(err));
+    }
+
+    pub fn check_code_region(&self, addr: u16) -> i8 {
+        if *self.code_regions.get(addr as usize).unwrap() {
+            self.clear_code_cache.set(true);
+            return -1;
+        } else {
+            return 0;
+        }
+    }
 }
