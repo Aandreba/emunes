@@ -27,7 +27,7 @@ fn interpreter() {
 
 #[test]
 fn llvm() {
-    let h = flexi_logger::Logger::try_with_str("trace")
+    let h = flexi_logger::Logger::try_with_str("debug")
         .unwrap()
         .start()
         .unwrap();
@@ -41,6 +41,8 @@ fn llvm() {
 
     let mut cpu = Cpu::new(memory, Llvm::new());
     cpu.run(0x400, |_, _| {}).unwrap();
+    // cpu.stack_ptr = 0xff;
+    // cpu.run(0x594, |_, _| {}).unwrap();
 
     h.flush();
     drop(h);

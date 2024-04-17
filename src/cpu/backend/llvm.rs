@@ -25,7 +25,7 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     ffi::c_void,
     mem::offset_of,
-    ops::Deref,
+    ops::{Deref, Range},
 };
 
 type Function = unsafe extern "C" fn(
@@ -104,7 +104,7 @@ impl<'cx> Backend for Llvm<'cx> {
                             .map_err(RunError::Backend)?
                             .into_int_value();
 
-                        let start_pc = builder.pc as usize;
+                        let start_pc = builder.pc;
                         loop {
                             let prev_pc = builder.pc;
                             builder.build_tick(prev_cycles).map_err(RunError::Backend)?;
@@ -131,12 +131,14 @@ impl<'cx> Backend for Llvm<'cx> {
                                 break;
                             }
                         }
-                        let end_pc = builder.pc as usize;
+                        let end_pc = builder.pc;
 
-                        backend.code_regions[start_pc..end_pc].fill(true);
+                        backend.code_regions[start_pc as usize..end_pc as usize].fill(true);
                         optimize_module(&builder.module);
-                        // builder.fn_value.print_to_stderr();
-                        entry.insert(Compiled::new(builder.module))
+                        if start_pc == 0x594 {
+                            builder.fn_value.print_to_stderr();
+                        }
+                        entry.insert(Compiled::new(builder.module, start_pc..end_pc))
                     }
                 }
                 .call(
@@ -148,10 +150,23 @@ impl<'cx> Backend for Llvm<'cx> {
                 )
                 .map_err(RunError::Memory)?;
 
-                if clear_code_cache {
-                    log::debug!("Found self-modifying code, clearing code cache");
-                    backend.compiled.clear();
-                    backend.code_regions.fill(false);
+                if !clear_code_cache.is_empty() {
+                    log::debug!("Found self-modifying code, clearing modified code");
+                    for addr in clear_code_cache {
+                        let mut regions = Vec::with_capacity(backend.compiled.len());
+
+                        for (&key, value) in backend.compiled.iter() {
+                            if value.range.contains(&addr) {
+                                regions.push(key)
+                            }
+                        }
+
+                        for addr in regions {
+                            backend.compiled.remove(&addr);
+                        }
+
+                        backend.code_regions.set(addr as usize, false);
+                    }
                 }
 
                 pc = next_pc
@@ -161,6 +176,7 @@ impl<'cx> Backend for Llvm<'cx> {
 }
 
 struct Builder<'cx> {
+    start_pc: u16,
     pc: u16,
     prev_state: State<'cx>,
 
@@ -332,6 +348,7 @@ impl<'a> Builder<'a> {
             let flags = builder.build_load(flags_ptr, "")?.into_int_value();
 
             let mut this = Self {
+                start_pc: pc,
                 pc,
                 #[cfg(target_endian = "big")]
                 bswap: Intrinsic::find("llvm.bswap")
@@ -449,10 +466,16 @@ impl<'a> Builder<'a> {
             Instr::TXS => {
                 self.stack_ptr = self.x;
             }
-            Instr::PHA => todo!(),
-            Instr::PHP => todo!(),
-            Instr::PLA => todo!(),
-            Instr::PLP => todo!(),
+            Instr::PHA => self.stack_push(self.accumulator)?,
+            Instr::PHP => self.stack_push(self.flags_into_u8(false)?)?,
+            Instr::PLA => {
+                self.accumulator = self.stack_pop()?;
+                self.set_nz(self.accumulator)?;
+            }
+            Instr::PLP => {
+                let flags = self.stack_pop()?;
+                self.flags_from_u8(flags)?;
+            }
             Instr::AND(op) => {
                 let (op, page_crossed) = self.translate_operand(op)?;
                 self.accumulator = self.build_and(self.accumulator, op, "")?;
@@ -608,7 +631,7 @@ impl<'a> Builder<'a> {
             }
             Instr::JMPIndirect(addr) => {
                 let next_pc =
-                    self.build_read_u16(self.cx.i16_type().const_int(addr as u64, false), cycles)?;
+                    self.build_read_u16(self.cx.i16_type().const_int(addr as u64, false))?;
                 self.build_jump(next_pc, cycles)?;
                 return Ok(true);
             }
@@ -730,7 +753,7 @@ impl<'a> Builder<'a> {
             Operand::Immediate(imm) => (self.cx.i8_type().const_int(imm as u64, false), None),
             Operand::Addressing(addr) => {
                 let (addr, page_crossed) = self.translate_address(addr)?;
-                (self.build_read_u8(addr, 0)?, page_crossed)
+                (self.build_read_u8(addr)?, page_crossed)
             }
         });
     }
@@ -777,10 +800,10 @@ impl<'a> Builder<'a> {
             Addressing::IndexedIndirect(base) => {
                 let subptr =
                     self.build_int_add(i8_type.const_int(base as u64, false), self.x, "")?;
-                (self.build_read_u16(subptr, 0)?, None)
+                (self.build_read_u16(subptr)?, None)
             }
             Addressing::IndirectIndexed(base) => {
-                let base = self.build_read_u16(i16_type.const_int(base as u64, false), 0)?;
+                let base = self.build_read_u16(i16_type.const_int(base as u64, false))?;
                 let addr = self.build_int_add(base, self.y, "")?;
                 (addr, Some(self.page_crossed(base, addr)?))
             }
@@ -832,6 +855,9 @@ impl<'a> Builder<'a> {
         self.build_conditional_branch(cond, then_block, continue_block)?;
 
         self.builder.position_at_end(then_block);
+        // we must preserve the same prev_state for both branches
+        let prev_state = self.prev_state.clone();
+
         let page_crossed = self.page_crossed(i16_type.const_int(self.pc as u64, false), addr)?;
         let ticks = self.build_int_add(
             self.build_int_z_extend(page_crossed, i8_type, "")?,
@@ -842,6 +868,7 @@ impl<'a> Builder<'a> {
         self.builder.build_return(Some(&addr))?;
 
         self.builder.position_at_end(continue_block);
+        self.prev_state = prev_state;
         return Ok(());
     }
 
@@ -855,11 +882,7 @@ impl<'a> Builder<'a> {
         return Ok(true);
     }
 
-    pub fn build_read_u8(
-        &mut self,
-        ptr: IntValue<'a>,
-        cycles: u8,
-    ) -> Result<IntValue<'a>, BuilderError> {
+    pub fn build_read_u8(&mut self, ptr: IntValue<'a>) -> Result<IntValue<'a>, BuilderError> {
         let output = self.build_alloca(self.cx.i8_type(), "")?;
         let res = self
             .build_call(
@@ -875,15 +898,11 @@ impl<'a> Builder<'a> {
             .as_any_value_enum()
             .into_int_value();
 
-        self.handle_memory_result(res, cycles)?;
+        self.handle_memory_result(res, 0)?;
         return Ok(self.build_load(output, "")?.into_int_value());
     }
 
-    pub fn build_read_u16(
-        &mut self,
-        ptr: IntValue<'a>,
-        cycles: u8,
-    ) -> Result<IntValue<'a>, BuilderError> {
+    pub fn build_read_u16(&mut self, ptr: IntValue<'a>) -> Result<IntValue<'a>, BuilderError> {
         let output = self.build_alloca(self.cx.i16_type(), "")?;
         let res = self
             .build_call(
@@ -899,7 +918,7 @@ impl<'a> Builder<'a> {
             .as_any_value_enum()
             .into_int_value();
 
-        self.handle_memory_result(res, cycles)?;
+        self.handle_memory_result(res, 0)?;
         return Ok(self.build_load(output, "")?.into_int_value());
     }
 
@@ -1020,10 +1039,13 @@ impl<'a> Builder<'a> {
         self.build_conditional_branch(condition, then_block, continue_block)?;
 
         self.builder.position_at_end(then_block);
+        // we must preserve the same prev state for both branches
+        let prev_state = self.prev_state.clone();
         // return next pc, perhaps the error is just a code cache invalidation
         self.build_jump(self.cx.i16_type().const_int(self.pc as u64, false), cycles)?;
 
         self.builder.position_at_end(continue_block);
+        self.prev_state = prev_state;
         return Ok(());
     }
 }
@@ -1037,6 +1059,7 @@ impl<'a> Deref for Builder<'a> {
     }
 }
 
+#[derive(Clone)]
 struct State<'cx> {
     accumulator: IntValue<'cx>,
     x: IntValue<'cx>,
@@ -1162,7 +1185,7 @@ impl<'a> Builder<'a> {
     pub fn stack_pop(&mut self) -> Result<IntValue<'a>, BuilderError> {
         self.stack_ptr =
             self.build_int_add(self.stack_ptr, self.cx.i8_type().const_int(1, false), "")?;
-        return self.build_read_u8(self.stack_addr()?, 0); // TODO may need to set cycles
+        return self.build_read_u8(self.stack_addr()?);
     }
 
     pub fn stack_pop_u16(&mut self) -> Result<IntValue<'a>, BuilderError> {
@@ -1173,7 +1196,7 @@ impl<'a> Builder<'a> {
 
     fn stack_addr(&self) -> Result<IntValue<'a>, BuilderError> {
         let i16_type = self.cx.i16_type();
-        return self.build_int_add(
+        return self.build_or(
             i16_type.const_int(0x100, false),
             self.build_int_z_extend(self.stack_ptr, i16_type, "")?,
             "",
@@ -1253,17 +1276,19 @@ unsafe extern "C" fn write_u16<M: Memory>(
 
 struct Compiled<'cx> {
     f: JitFunction<'cx, Function>,
+    range: Range<u16>,
     _exec: ExecutionEngine<'cx>,
 }
 
 impl<'cx> Compiled<'cx> {
-    pub fn new(module: Module<'cx>) -> Self {
+    pub fn new(module: Module<'cx>, range: Range<u16>) -> Self {
         let exec = module
             .create_jit_execution_engine(OptimizationLevel::Default)
             .unwrap();
 
         return Self {
             f: unsafe { exec.get_function(FUNTION_NAME).unwrap() },
+            range,
             _exec: exec,
         };
     }
@@ -1276,11 +1301,11 @@ impl<'cx> Compiled<'cx> {
         tick: &Closure<dyn 'a + FnMut(u8)>,
         code_regions: &CodeRegionArray,
         prev_cycles: &mut u8,
-    ) -> Result<(u16, bool), M::Error> {
+    ) -> Result<(u16, Vec<u16>), M::Error> {
         let info = MemoryInfo::<M> {
             code_regions,
             latest_error: Cell::new(None::<M::Error>),
-            clear_code_cache: Cell::new(false),
+            clear_code_cache: Cell::new(Vec::new()),
         };
 
         let next_pc = self.f.call(
@@ -1298,7 +1323,7 @@ impl<'cx> Compiled<'cx> {
 
         return match info.latest_error.take() {
             Some(err) => Err(err),
-            None => Ok((next_pc, info.clear_code_cache.get())),
+            None => Ok((next_pc, info.clear_code_cache.take())),
         };
     }
 }
@@ -1316,7 +1341,7 @@ fn optimize_module(module: &Module) -> bool {
 struct MemoryInfo<'a, M: Memory> {
     code_regions: &'a CodeRegionArray,
     latest_error: Cell<Option<M::Error>>,
-    clear_code_cache: Cell<bool>,
+    clear_code_cache: Cell<Vec<u16>>,
 }
 
 impl<'a, M: Memory> MemoryInfo<'a, M> {
@@ -1326,7 +1351,11 @@ impl<'a, M: Memory> MemoryInfo<'a, M> {
 
     pub fn check_code_region(&self, addr: u16) -> i8 {
         if *self.code_regions.get(addr as usize).unwrap() {
-            self.clear_code_cache.set(true);
+            self.clear_code_cache.set({
+                let mut prev = self.clear_code_cache.take();
+                prev.push(addr);
+                prev
+            });
             return -1;
         } else {
             return 0;
