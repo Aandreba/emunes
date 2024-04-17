@@ -496,7 +496,7 @@ impl<'a> Builder<'a> {
             }
             Instr::BIT(addr) => {
                 let i8_type = self.cx.i8_type();
-                let zero = i8_type.const_zero();
+                let i8_zero = i8_type.const_zero();
 
                 let (addr, _) = self.translate_address(addr)?;
                 let op = self.build_read_u8(addr)?;
@@ -504,7 +504,7 @@ impl<'a> Builder<'a> {
                 let zero = self.build_int_compare(
                     IntPredicate::EQ,
                     self.build_and(self.accumulator, op, "")?,
-                    zero,
+                    i8_zero,
                     "",
                 )?;
 
@@ -518,7 +518,7 @@ impl<'a> Builder<'a> {
                     "",
                 )?;
 
-                let negative = self.build_int_compare(IntPredicate::SLT, op, zero, "")?;
+                let negative = self.build_int_compare(IntPredicate::SLT, op, i8_zero, "")?;
 
                 self.set_flag(Flag::Zero, zero)?;
                 self.set_flag(Flag::Negative, negative)?;
@@ -1014,11 +1014,15 @@ impl<'a> Builder<'a> {
             Addressing::IndexedIndirect(base) => {
                 let subptr =
                     self.build_int_add(i8_type.const_int(base as u64, false), self.x, "")?;
-                (self.build_read_u16(subptr)?, None)
+                (
+                    self.build_read_u16(self.build_int_z_extend(subptr, i16_type, "")?)?,
+                    None,
+                )
             }
             Addressing::IndirectIndexed(base) => {
                 let base = self.build_read_u16(i16_type.const_int(base as u64, false))?;
-                let addr = self.build_int_add(base, self.y, "")?;
+                let addr =
+                    self.build_int_add(base, self.build_int_z_extend(self.y, i16_type, "")?, "")?;
                 (addr, Some(self.page_crossed(base, addr)?))
             }
         });
