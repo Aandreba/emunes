@@ -494,7 +494,7 @@ impl<'a> Builder<'a> {
                 self.set_nz(self.accumulator)?;
                 self.handle_page_cross(page_crossed, 1)?;
             }
-            Instr::BIT(_) => todo!(),
+            Instr::BIT(addr) => {}
             Instr::ADC(op) => {
                 let (op, page_crossed) = self.translate_operand(op)?;
 
@@ -667,7 +667,17 @@ impl<'a> Builder<'a> {
             Instr::SEC => self.insert_flag(Flag::Carry)?,
             Instr::SED => self.insert_flag(Flag::Decimal)?,
             Instr::SEI => self.insert_flag(Flag::InterruptDisable)?,
-            Instr::BRK => todo!(),
+            Instr::BRK => {
+                let i16_type = self.cx.i16_type();
+
+                self.stack_push_u16(i16_type.const_int(self.pc.wrapping_add(1) as u64, false))?;
+                let flags = self.flags_into_u8(false)?;
+                self.stack_push(flags)?;
+                self.insert_flag(Flag::InterruptDisable)?;
+
+                let brk_addr = self.build_read_u16(i16_type.const_int(0xfffe, false))?;
+                self.build_jump(brk_addr, cycles)?;
+            }
             Instr::NOP => {}
             Instr::RTI => {
                 let next_flags = self.stack_pop()?;
