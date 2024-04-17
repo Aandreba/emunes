@@ -631,7 +631,14 @@ impl<'a> Builder<'a> {
                 self.set_flag(Flag::Zero, eq)?;
                 self.set_flag(Flag::Negative, lt)?;
             }
-            Instr::INC(_) => todo!(),
+            Instr::INC(addr) => {
+                let (addr, _) = self.translate_address(addr)?;
+                let op = self.build_read_u8(addr)?;
+                let res = self.build_int_add(op, self.cx.i8_type().const_int(1, false), "")?;
+
+                self.set_nz(res)?;
+                self.build_write_u8(addr, res, cycles)?;
+            }
             Instr::INX => {
                 self.x = self.build_int_add(self.x, self.cx.i8_type().const_int(1, false), "")?;
                 self.set_nz(self.x)?;
@@ -640,7 +647,14 @@ impl<'a> Builder<'a> {
                 self.y = self.build_int_add(self.y, self.cx.i8_type().const_int(1, false), "")?;
                 self.set_nz(self.y)?;
             }
-            Instr::DEC(_) => todo!(),
+            Instr::DEC(addr) => {
+                let (addr, _) = self.translate_address(addr)?;
+                let op = self.build_read_u8(addr)?;
+                let res = self.build_int_sub(op, self.cx.i8_type().const_int(1, false), "")?;
+
+                self.set_nz(res)?;
+                self.build_write_u8(addr, res, cycles)?;
+            }
             Instr::DEX => {
                 self.x = self.build_int_sub(self.x, self.cx.i8_type().const_int(1, false), "")?;
                 self.set_nz(self.x)?;
