@@ -7,7 +7,7 @@
     i8  ; updated_overflow
 }
 
-define void @adc(i8 noundef zeroext %lhs, i8 noundef zeroext %rhs, i1 noundef zeroext %carry, i1 noundef zeroext %decimal, ptr noalias nocapture noundef writeonly align 1 dereferenceable(6) %output) unnamed_addr {
+define void @adc(i8 noundef zeroext %lhs, i8 noundef zeroext %rhs, i1 noundef zeroext %carry, i1 noundef zeroext %decimal, i8* noalias nocapture noundef writeonly align 1 dereferenceable(6) %output) unnamed_addr {
 start:
   br i1 %decimal, label %bb1, label %bb6
 
@@ -65,21 +65,21 @@ bb12:
   %_33 = zext i1 %_34 to i8
   %_31 = trunc i16 %res.018 to i8
   %_46 = zext i1 %6 to i8
-  store i8 %_31, ptr %output, align 1
-  %_30.sroa.4.0.output.sroa_idx = getelementptr inbounds i8, ptr %output, i64 1
-  store i8 %_41, ptr %_30.sroa.4.0.output.sroa_idx, align 1
-  %_30.sroa.5.0.output.sroa_idx = getelementptr inbounds i8, ptr %output, i64 2
-  store i8 %_44.0, ptr %_30.sroa.5.0.output.sroa_idx, align 1
-  %_30.sroa.6.0.output.sroa_idx = getelementptr inbounds i8, ptr %output, i64 3
-  store i8 %_33, ptr %_30.sroa.6.0.output.sroa_idx, align 1
-  %_30.sroa.7.0.output.sroa_idx = getelementptr inbounds i8, ptr %output, i64 4
-  store i8 %_37, ptr %_30.sroa.7.0.output.sroa_idx, align 1
-  %_30.sroa.8.0.output.sroa_idx = getelementptr inbounds i8, ptr %output, i64 5
-  store i8 %_46, ptr %_30.sroa.8.0.output.sroa_idx, align 1
+  store i8 %_31, i8* %output, align 1
+  %_30.sroa.4.0.output.sroa_idx = getelementptr inbounds i8, i8* %output, i64 1
+  store i8 %_41, i8* %_30.sroa.4.0.output.sroa_idx, align 1
+  %_30.sroa.5.0.output.sroa_idx = getelementptr inbounds i8, i8* %output, i64 2
+  store i8 %_44.0, i8* %_30.sroa.5.0.output.sroa_idx, align 1
+  %_30.sroa.6.0.output.sroa_idx = getelementptr inbounds i8, i8* %output, i64 3
+  store i8 %_33, i8* %_30.sroa.6.0.output.sroa_idx, align 1
+  %_30.sroa.7.0.output.sroa_idx = getelementptr inbounds i8, i8* %output, i64 4
+  store i8 %_37, i8* %_30.sroa.7.0.output.sroa_idx, align 1
+  %_30.sroa.8.0.output.sroa_idx = getelementptr inbounds i8, i8* %output, i64 5
+  store i8 %_46, i8* %_30.sroa.8.0.output.sroa_idx, align 1
   ret void
 }
 
-define void @sbc(i8 noundef zeroext %lhs, i8 noundef zeroext %rhs, i1 noundef zeroext %carry, i1 noundef zeroext %decimal, ptr noalias nocapture noundef writeonly align 1 dereferenceable(6) %output) unnamed_addr {
+define void @sbc(i8 noundef zeroext %lhs, i8 noundef zeroext %rhs, i1 noundef zeroext %carry, i1 noundef zeroext %decimal, i8* noalias nocapture noundef writeonly align 1 dereferenceable(6) %output) unnamed_addr {
 start:
   %borrow = xor i1 %carry, true
   br i1 %decimal, label %bb1, label %bb6
@@ -139,16 +139,16 @@ bb12:
   %_37 = zext i1 %_38 to i8
   %_35 = trunc i16 %res.019 to i8
   %_50 = zext i1 %6 to i8
-  store i8 %_35, ptr %output, align 1
-  %_34.sroa.4.0.output.sroa_idx = getelementptr inbounds i8, ptr %output, i64 1
-  store i8 %_45, ptr %_34.sroa.4.0.output.sroa_idx, align 1
-  %_34.sroa.5.0.output.sroa_idx = getelementptr inbounds i8, ptr %output, i64 2
-  store i8 %_48.0, ptr %_34.sroa.5.0.output.sroa_idx, align 1
-  %_34.sroa.6.0.output.sroa_idx = getelementptr inbounds i8, ptr %output, i64 3
-  store i8 %_37, ptr %_34.sroa.6.0.output.sroa_idx, align 1
-  %_34.sroa.7.0.output.sroa_idx = getelementptr inbounds i8, ptr %output, i64 4
-  store i8 %_41, ptr %_34.sroa.7.0.output.sroa_idx, align 1
-  %_34.sroa.8.0.output.sroa_idx = getelementptr inbounds i8, ptr %output, i64 5
-  store i8 %_50, ptr %_34.sroa.8.0.output.sroa_idx, align 1
+  store i8 %_35, i8* %output, align 1
+  %_34.sroa.4.0.output.sroa_idx = getelementptr inbounds i8, i8* %output, i64 1
+  store i8 %_45, i8* %_34.sroa.4.0.output.sroa_idx, align 1
+  %_34.sroa.5.0.output.sroa_idx = getelementptr inbounds i8, i8* %output, i64 2
+  store i8 %_48.0, i8* %_34.sroa.5.0.output.sroa_idx, align 1
+  %_34.sroa.6.0.output.sroa_idx = getelementptr inbounds i8, i8* %output, i64 3
+  store i8 %_37, i8* %_34.sroa.6.0.output.sroa_idx, align 1
+  %_34.sroa.7.0.output.sroa_idx = getelementptr inbounds i8, i8* %output, i64 4
+  store i8 %_41, i8* %_34.sroa.7.0.output.sroa_idx, align 1
+  %_34.sroa.8.0.output.sroa_idx = getelementptr inbounds i8, i8* %output, i64 5
+  store i8 %_50, i8* %_34.sroa.8.0.output.sroa_idx, align 1
   ret void
 }

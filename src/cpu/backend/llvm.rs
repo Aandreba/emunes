@@ -135,7 +135,9 @@ impl<'cx> Backend for Llvm<'cx> {
 
                         backend.code_regions[start_pc as usize..end_pc as usize].fill(true);
                         optimize_module(&builder.module);
-                        // builder.fn_value.print_to_stderr();
+                        if start_pc == 0x99b {
+                            builder.fn_value.print_to_stderr();
+                        }
                         entry.insert(Compiled::new(builder.module, start_pc..end_pc))
                     }
                 }
@@ -530,6 +532,11 @@ impl<'a> Builder<'a> {
                 let carry = self.get_flag(Flag::Carry)?;
                 let decimal = self.get_flag(Flag::Decimal)?; // TODO disable_decimal flag
                 let output = self.build_alloca(self.adc_output_type, "")?;
+                let output_void = self.build_pointer_cast(
+                    output,
+                    self.cx.i8_type().ptr_type(AddressSpace::default()),
+                    "",
+                )?;
 
                 self.build_call(
                     self.adc,
@@ -538,7 +545,7 @@ impl<'a> Builder<'a> {
                         rhs.into(),
                         carry.into(),
                         decimal.into(),
-                        output.into(),
+                        output_void.into(),
                     ],
                     "",
                 )?;
@@ -569,6 +576,11 @@ impl<'a> Builder<'a> {
                 let carry = self.get_flag(Flag::Carry)?;
                 let decimal = self.get_flag(Flag::Decimal)?; // TODO disable_decimal flag
                 let output = self.build_alloca(self.adc_output_type, "")?;
+                let output_void = self.build_pointer_cast(
+                    output,
+                    self.cx.i8_type().ptr_type(AddressSpace::default()),
+                    "",
+                )?;
 
                 self.build_call(
                     self.sbc,
@@ -577,7 +589,7 @@ impl<'a> Builder<'a> {
                         rhs.into(),
                         carry.into(),
                         decimal.into(),
-                        output.into(),
+                        output_void.into(),
                     ],
                     "",
                 )?;
@@ -1535,6 +1547,8 @@ fn optimize_module(module: &Module) -> bool {
     builder.set_optimization_level(OptimizationLevel::Default);
 
     let manager = PassManager::create(());
+    #[cfg(debug_assertions)]
+    manager.add_verifier_pass();
     builder.populate_module_pass_manager(&manager);
 
     return manager.run_on(module);
