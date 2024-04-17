@@ -135,9 +135,7 @@ impl<'cx> Backend for Llvm<'cx> {
 
                         backend.code_regions[start_pc as usize..end_pc as usize].fill(true);
                         optimize_module(&builder.module);
-                        if start_pc == 0x594 {
-                            builder.fn_value.print_to_stderr();
-                        }
+                        // builder.fn_value.print_to_stderr();
                         entry.insert(Compiled::new(builder.module, start_pc..end_pc))
                     }
                 }
@@ -494,7 +492,36 @@ impl<'a> Builder<'a> {
                 self.set_nz(self.accumulator)?;
                 self.handle_page_cross(page_crossed, 1)?;
             }
-            Instr::BIT(addr) => {}
+            Instr::BIT(addr) => {
+                let i8_type = self.cx.i8_type();
+                let zero = i8_type.const_zero();
+
+                let (addr, _) = self.translate_address(addr)?;
+                let op = self.build_read_u8(addr)?;
+
+                let zero = self.build_int_compare(
+                    IntPredicate::EQ,
+                    self.build_and(self.accumulator, op, "")?,
+                    zero,
+                    "",
+                )?;
+
+                let overflow = self.build_int_truncate(
+                    self.build_and(
+                        self.build_right_shift(op, i8_type.const_int(6, false), false, "")?,
+                        i8_type.const_int(1, false),
+                        "",
+                    )?,
+                    self.cx.bool_type(),
+                    "",
+                )?;
+
+                let negative = self.build_int_compare(IntPredicate::SLT, op, zero, "")?;
+
+                self.set_flag(Flag::Zero, zero)?;
+                self.set_flag(Flag::Negative, negative)?;
+                self.set_flag(Flag::Overflow, overflow)?;
+            }
             Instr::ADC(op) => {
                 let (op, page_crossed) = self.translate_operand(op)?;
 
