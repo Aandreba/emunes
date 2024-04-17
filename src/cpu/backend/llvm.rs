@@ -16,7 +16,8 @@ use inkwell::{
     passes::{PassManager, PassManagerBuilder},
     types::StructType,
     values::{
-        AnyValue, CallableValue, FunctionValue, IntValue, PointerValue, StructValue, VectorValue,
+        AnyValue, BasicValue, CallableValue, FunctionValue, IntValue, PointerValue, StructValue,
+        VectorValue,
     },
     AddressSpace, IntPredicate, OptimizationLevel,
 };
@@ -50,6 +51,8 @@ const X_OFFSET: usize = offset_of!(crate::cpu::State, x);
 const Y_OFFSET: usize = offset_of!(crate::cpu::State, y);
 const STACK_PTR_OFFSET: usize = offset_of!(crate::cpu::State, stack_ptr);
 const FLAGS_OFFSET: usize = offset_of!(crate::cpu::State, flags);
+const DECIMAL_ENABLED_OFFSET: usize = offset_of!(crate::cpu::State, decimal_enabled);
+const NMI_INTERRUPT_OFFSET: usize = offset_of!(crate::cpu::State, nmi_interrupt);
 
 pub struct Llvm<'cx> {
     compiled: HashMap<u16, Compiled<'cx>>,
@@ -86,12 +89,12 @@ impl<'cx> Backend for Llvm<'cx> {
             let mut prev_pc = None;
             let mut prev_cycles = 0;
             loop {
-                #[cfg(debug_assertions)]
+                #[cfg(test)]
                 if prev_pc.is_some_and(|prev| prev == pc) {
-                    panic!("Infinite loop detected at 0x{pc:X}")
+                    log::warn!("Infinite loop detected at 0x{pc:X}")
                 }
 
-                log::debug!("Next PC: 0x{pc:X}\n{:?}", &*state);
+                log::trace!("Next PC: 0x{pc:X}\n{:?}", &*state);
                 prev_pc = Some(pc);
                 let (next_pc, clear_code_cache) = match backend.compiled.entry(pc) {
                     Entry::Occupied(entry) => entry.into_mut(),
@@ -108,8 +111,7 @@ impl<'cx> Backend for Llvm<'cx> {
                         loop {
                             let prev_pc = builder.pc;
                             builder.build_tick(prev_cycles).map_err(RunError::Backend)?;
-
-                            // TODO Handle NMI interrupt
+                            builder.build_handle_nmi().map_err(RunError::Backend)?;
 
                             let Some(instr) = read_instruction(&mut *memory, &mut builder.pc)
                                 .map_err(RunError::Memory)?
@@ -134,10 +136,8 @@ impl<'cx> Backend for Llvm<'cx> {
                         let end_pc = builder.pc;
 
                         backend.code_regions[start_pc as usize..end_pc as usize].fill(true);
-                        optimize_module(&builder.module);
-                        if start_pc == 0x99b {
-                            builder.fn_value.print_to_stderr();
-                        }
+                        // builder.fn_value.print_to_stderr();
+                        // optimize_module(&builder.module);
                         entry.insert(Compiled::new(builder.module, start_pc..end_pc))
                     }
                 }
@@ -151,7 +151,7 @@ impl<'cx> Backend for Llvm<'cx> {
                 .map_err(RunError::Memory)?;
 
                 if !clear_code_cache.is_empty() {
-                    log::debug!("Found self-modifying code, clearing modified code");
+                    log::warn!("Found self-modifying code, clearing modified code");
                     for addr in clear_code_cache {
                         let mut regions = Vec::with_capacity(backend.compiled.len());
 
@@ -186,12 +186,14 @@ struct Builder<'cx> {
     y_ptr: PointerValue<'cx>,
     stack_ptr_ptr: PointerValue<'cx>,
     flags_ptr: PointerValue<'cx>,
+    nmi_interrupt_ptr: PointerValue<'cx>,
 
     accumulator: IntValue<'cx>,
     x: IntValue<'cx>,
     y: IntValue<'cx>,
     stack_ptr: IntValue<'cx>,
     flags: VectorValue<'cx>,
+    decimal_enabled: IntValue<'cx>,
     prev_cycles: PointerValue<'cx>,
 
     memory_data_ptr: PointerValue<'cx>,
@@ -341,11 +343,31 @@ impl<'a> Builder<'a> {
                 "flags_ptr",
             )?;
 
+            let decimal_enabled_ptr = builder.build_gep(
+                state_ptr,
+                &[i64_type.const_int(DECIMAL_ENABLED_OFFSET as u64, false)],
+                "decimal_enabled_ptr",
+            )?;
+
+            let nmi_interrupt_ptr = builder.build_gep(
+                state_ptr,
+                &[i64_type.const_int(NMI_INTERRUPT_OFFSET as u64, false)],
+                "nmi_interrupt_ptr",
+            )?;
+
             let accumulator = builder.build_load(accumulator_ptr, "")?.into_int_value();
             let x = builder.build_load(x_ptr, "")?.into_int_value();
             let y = builder.build_load(y_ptr, "")?.into_int_value();
             let stack_ptr = builder.build_load(stack_ptr_ptr, "")?.into_int_value();
             let flags = builder.build_load(flags_ptr, "")?.into_int_value();
+            let decimal_enabled = builder.build_int_compare(
+                IntPredicate::NE,
+                builder
+                    .build_load(decimal_enabled_ptr, "")?
+                    .into_int_value(),
+                i8_type.const_zero(),
+                "",
+            )?;
 
             let mut this = Self {
                 start_pc: pc,
@@ -371,10 +393,12 @@ impl<'a> Builder<'a> {
                 y_ptr,
                 stack_ptr_ptr,
                 flags_ptr,
+                nmi_interrupt_ptr,
                 accumulator,
                 x,
                 y,
                 stack_ptr,
+                decimal_enabled,
                 flags: flags_type.get_poison(),
                 tick_data_ptr: fn_value.get_nth_param(1).unwrap().into_pointer_value(),
                 tick: fn_value.get_nth_param(2).unwrap().into_pointer_value(),
@@ -466,8 +490,8 @@ impl<'a> Builder<'a> {
             Instr::TXS => {
                 self.stack_ptr = self.x;
             }
-            Instr::PHA => self.stack_push(self.accumulator)?,
-            Instr::PHP => self.stack_push(self.flags_into_u8(false)?)?,
+            Instr::PHA => self.stack_push(self.accumulator, cycles)?,
+            Instr::PHP => self.stack_push(self.flags_into_u8(false)?, cycles)?,
             Instr::PLA => {
                 self.accumulator = self.stack_pop()?;
                 self.set_nz(self.accumulator)?;
@@ -530,7 +554,9 @@ impl<'a> Builder<'a> {
                 let lhs = self.accumulator;
                 let rhs = op;
                 let carry = self.get_flag(Flag::Carry)?;
-                let decimal = self.get_flag(Flag::Decimal)?; // TODO disable_decimal flag
+                let decimal =
+                    self.build_and(self.get_flag(Flag::Decimal)?, self.decimal_enabled, "")?;
+
                 let output = self.build_alloca(self.adc_output_type, "")?;
                 let output_void = self.build_pointer_cast(
                     output,
@@ -574,7 +600,9 @@ impl<'a> Builder<'a> {
                 let lhs = self.accumulator;
                 let rhs = op;
                 let carry = self.get_flag(Flag::Carry)?;
-                let decimal = self.get_flag(Flag::Decimal)?; // TODO disable_decimal flag
+                let decimal =
+                    self.build_and(self.get_flag(Flag::Decimal)?, self.decimal_enabled, "")?;
+
                 let output = self.build_alloca(self.adc_output_type, "")?;
                 let output_void = self.build_pointer_cast(
                     output,
@@ -876,11 +904,12 @@ impl<'a> Builder<'a> {
 
                 self.stack_push_u16(i16_type.const_int(self.pc.wrapping_add(1) as u64, false))?;
                 let flags = self.flags_into_u8(false)?;
-                self.stack_push(flags)?;
+                self.stack_push(flags, cycles)?;
                 self.insert_flag(Flag::InterruptDisable)?;
 
                 let brk_addr = self.build_read_u16(i16_type.const_int(0xfffe, false))?;
                 self.build_jump(brk_addr, cycles)?;
+                return Ok(true);
             }
             Instr::NOP => {}
             Instr::RTI => {
@@ -1239,6 +1268,62 @@ impl<'a> Builder<'a> {
         return self.build_to_le(int);
     }
 
+    pub fn build_handle_nmi(&mut self) -> Result<(), BuilderError> {
+        let i8_type = self.cx.i8_type();
+        let i16_type = self.cx.i16_type();
+
+        let nmi_interrupt = self
+            .build_load(self.nmi_interrupt_ptr, "")?
+            .into_int_value();
+
+        nmi_interrupt
+            .as_instruction_value()
+            .unwrap()
+            .set_volatile(true)
+            .unwrap();
+
+        self.build_store(self.nmi_interrupt_ptr, self.cx.i8_type().const_zero())?
+            .set_volatile(true)
+            .unwrap();
+
+        let nmi_interrupt =
+            self.build_int_compare(IntPredicate::NE, nmi_interrupt, i8_type.const_zero(), "")?;
+
+        let then_block = self.cx.append_basic_block(self.fn_value, "");
+        let continue_block = self.cx.append_basic_block(self.fn_value, "");
+        self.build_conditional_branch(nmi_interrupt, then_block, continue_block)?;
+
+        // we must preserve the same prev state for both branches
+        let prev_prev_state = self.prev_state.clone();
+        let prev_state = State {
+            accumulator: self.accumulator,
+            x: self.x,
+            y: self.y,
+            stack_ptr: self.stack_ptr,
+            flags: self.flags,
+        };
+
+        // Handle NMI interrupt
+        self.position_at_end(then_block);
+        self.stack_push_u16(i16_type.const_int(self.pc as u64, false))?;
+        let flags = self.flags_into_u8(true)?;
+        self.stack_push(flags, 0)?;
+        self.insert_flag(Flag::InterruptDisable)?;
+        let next_pc = self.build_read_u16(i16_type.const_int(0xfffa, false))?;
+        self.build_jump(next_pc, 2)?;
+
+        self.position_at_end(continue_block);
+        // Restore state
+        self.accumulator = prev_state.accumulator;
+        self.x = prev_state.x;
+        self.y = prev_state.y;
+        self.stack_ptr = prev_state.stack_ptr;
+        self.flags = prev_state.flags;
+        self.prev_state = prev_prev_state;
+
+        return Ok(());
+    }
+
     fn extract_adc_bit(
         &self,
         adc: StructValue<'a>,
@@ -1386,17 +1471,19 @@ impl<'a> Builder<'a> {
 
 // Stack Ops
 impl<'a> Builder<'a> {
-    pub fn stack_push(&mut self, val: IntValue<'a>) -> Result<(), BuilderError> {
-        self.build_write_u8(self.stack_addr()?, val, 0)?; // TODO may need to set cycles
+    pub fn stack_push(&mut self, val: IntValue<'a>, cycles: u8) -> Result<(), BuilderError> {
+        let addr = self.stack_addr()?;
         self.stack_ptr =
             self.build_int_sub(self.stack_ptr, self.cx.i8_type().const_int(1, false), "")?;
+
+        self.build_write_u8(addr, val, cycles)?; // TODO may need to set cycles
         return Ok(());
     }
 
     pub fn stack_push_u16(&mut self, val: IntValue<'a>) -> Result<(), BuilderError> {
         let [lo, hi] = self.build_to_le_bytes(val)?;
-        self.stack_push(hi)?;
-        self.stack_push(lo)?;
+        self.stack_push(hi, 0)?; // TODO do we set cycles?
+        self.stack_push(lo, 0)?; // TODO do we set cycles?
         return Ok(());
     }
 

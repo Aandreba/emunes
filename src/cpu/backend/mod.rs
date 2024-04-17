@@ -6,7 +6,7 @@ pub mod interpreter;
 pub mod llvm;
 
 pub trait Backend: Sized {
-    type Error: Debug;
+    type Error: Debug + Send;
 
     fn run<M: Memory>(
         cpu: &mut Cpu<M, Self>,

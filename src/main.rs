@@ -1,11 +1,19 @@
 use color_eyre::eyre::Report;
-use emunes::{cartridge::Cartridge, joystick::Joystick, Nes};
+use emunes::{
+    cartridge::Cartridge,
+    cpu::backend::{interpreter::Interpreter, llvm::Llvm},
+    joystick::Joystick,
+    memory::NesMemory,
+    Nes,
+};
 use std::{
     future::Future,
+    rc::Rc,
     sync::Arc,
     task::{Context, Poll, Wake},
     thread::Thread,
 };
+use utils_atomics::channel::once::async_channel;
 
 pub fn main() -> color_eyre::Result<()> {
     color_eyre::install().unwrap();
@@ -15,7 +23,7 @@ pub fn main() -> color_eyre::Result<()> {
         .unwrap();
 
     return block_on(async move {
-        let pacman = std::fs::read("Bomberman (USA).nes")?;
+        let pacman = std::fs::read("Pac-Man (USA) (Namco).nes")?;
         let cartridge = Cartridge::new(&pacman).map_err(color_eyre::Report::msg)?;
 
         log::debug!("PRG ROM data: {} byte(s)", cartridge.prg_rom.len());
@@ -23,10 +31,32 @@ pub fn main() -> color_eyre::Result<()> {
         log::debug!("Mapper: {}", cartridge.mapper);
         log::debug!("Mirroring: {:?}", cartridge.screen_mirroring);
 
-        let nes = Nes::new(cartridge).await?;
-        nes.run(Joystick::ARROW, None)
-            .map_err(|e| Report::msg(format!("{e:?}")))?;
-        return Ok(());
+        let (memory, event_loop) = NesMemory::new(cartridge).await?;
+        let (send_event_loop_handle, event_loop_handle) = async_channel();
+
+        let handle = Rc::new(std::thread::spawn(move || {
+            let mut nes = Nes::from_memory(memory, Llvm::new());
+            send_event_loop_handle.send(nes.set_input(Joystick::ARROW, None));
+            nes.run().map_err(|e| Report::msg(format!("{e:?}")))
+        }));
+
+        let mut event_loop_handle = event_loop_handle.await.unwrap();
+        let el_handle = handle.clone();
+
+        event_loop
+            .run(move |event, elwt| {
+                if el_handle.is_finished() {
+                    elwt.exit();
+                }
+                event_loop_handle(event, elwt)
+            })
+            .unwrap();
+
+        if handle.is_finished() {
+            return Rc::into_inner(handle).unwrap().join().unwrap();
+        } else {
+            return Ok(());
+        }
     });
 }
 

@@ -3,6 +3,7 @@ use emunes::cpu::{
     memory::{create_linear_memory, debug::DebugMemory, Memory},
     Cpu,
 };
+use flexi_logger::FileSpec;
 
 #[test]
 fn interpreter() {
@@ -29,6 +30,7 @@ fn interpreter() {
 fn llvm() {
     let h = flexi_logger::Logger::try_with_str("debug")
         .unwrap()
+        .log_to_file(FileSpec::default())
         .start()
         .unwrap();
 

@@ -30,7 +30,8 @@ impl Backend for Interpreter {
                 cpu.push_u16(pc)?;
                 cpu.push(cpu.state.flags.into_u8(true))?;
                 cpu.state.flags.insert(Flag::InterruptDisable);
-                tick(cpu, 2);
+                // tick(cpu, 2);
+                prev_cycles = 2;
                 pc = cpu.memory.read_u16(0xfffa).map_err(RunError::Memory)?;
                 continue;
             }
