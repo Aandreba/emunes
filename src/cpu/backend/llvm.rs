@@ -649,10 +649,161 @@ impl<'a> Builder<'a> {
                 self.y = self.build_int_sub(self.y, self.cx.i8_type().const_int(1, false), "")?;
                 self.set_nz(self.y)?;
             }
-            Instr::ASL(_) => todo!(),
-            Instr::LSR(_) => todo!(),
-            Instr::ROL(_) => todo!(),
-            Instr::ROR(_) => todo!(),
+            Instr::ASL(Operand::Accumulator) => {
+                let i8_type = self.cx.i8_type();
+
+                let carry = self.build_int_compare(
+                    IntPredicate::SLT,
+                    self.accumulator,
+                    i8_type.const_zero(),
+                    "",
+                )?;
+                self.set_flag(Flag::Carry, carry)?;
+
+                self.accumulator =
+                    self.build_left_shift(self.accumulator, i8_type.const_int(1, false), "")?;
+                self.set_nz(self.accumulator)?;
+            }
+            Instr::ASL(Operand::Addressing(addr)) => {
+                let i8_type = self.cx.i8_type();
+
+                let (addr, _) = self.translate_address(addr)?;
+                let op = self.build_read_u8(addr)?;
+                let res = self.build_left_shift(op, i8_type.const_int(1, false), "")?;
+
+                let carry = self.build_int_compare(
+                    IntPredicate::SLT,
+                    self.accumulator,
+                    i8_type.const_zero(),
+                    "",
+                )?;
+                self.set_flag(Flag::Carry, carry)?;
+                self.set_nz(res)?;
+
+                self.build_write_u8(addr, res, cycles)?;
+            }
+            Instr::LSR(Operand::Accumulator) => {
+                let i8_type = self.cx.i8_type();
+
+                let carry = self.build_int_truncate(self.accumulator, self.cx.bool_type(), "")?;
+                self.set_flag(Flag::Carry, carry)?;
+
+                self.accumulator = self.build_right_shift(
+                    self.accumulator,
+                    i8_type.const_int(1, false),
+                    false,
+                    "",
+                )?;
+                self.set_nz(self.accumulator)?;
+            }
+            Instr::LSR(Operand::Addressing(addr)) => {
+                let i8_type = self.cx.i8_type();
+
+                let (addr, _) = self.translate_address(addr)?;
+                let op = self.build_read_u8(addr)?;
+                let res = self.build_right_shift(op, i8_type.const_int(1, false), false, "")?;
+
+                let carry = self.build_int_truncate(self.accumulator, self.cx.bool_type(), "")?;
+                self.set_flag(Flag::Carry, carry)?;
+                self.set_nz(res)?;
+
+                self.build_write_u8(addr, res, cycles)?;
+            }
+            Instr::ROL(Operand::Accumulator) => {
+                let i8_type = self.cx.i8_type();
+                let prev_acc = self.accumulator;
+
+                let ext = self.build_int_z_extend(self.get_flag(Flag::Carry)?, i8_type, "")?;
+                self.accumulator = self.build_or(
+                    self.build_left_shift(self.accumulator, i8_type.const_int(1, false), "")?,
+                    ext,
+                    "",
+                )?;
+
+                let carry =
+                    self.build_int_compare(IntPredicate::SLT, prev_acc, i8_type.const_zero(), "")?;
+                self.set_flag(Flag::Carry, carry)?;
+                self.set_nz(self.accumulator)?;
+            }
+            Instr::ROL(Operand::Addressing(addr)) => {
+                let (addr, _) = self.translate_address(addr)?;
+
+                let i8_type = self.cx.i8_type();
+                let prev = self.build_read_u8(addr)?;
+
+                let ext = self.build_int_z_extend(self.get_flag(Flag::Carry)?, i8_type, "")?;
+                let res = self.build_or(
+                    self.build_left_shift(prev, i8_type.const_int(1, false), "")?,
+                    ext,
+                    "",
+                )?;
+
+                let carry =
+                    self.build_int_compare(IntPredicate::SLT, prev, i8_type.const_zero(), "")?;
+                self.set_flag(Flag::Carry, carry)?;
+                self.set_nz(res)?;
+                self.build_write_u8(addr, res, cycles)?;
+            }
+            Instr::ROR(Operand::Accumulator) => {
+                let i8_type = self.cx.i8_type();
+                let zero = i8_type.const_zero();
+                let prev_acc = self.accumulator;
+
+                let ext = self
+                    .build_select(
+                        self.get_flag(Flag::Carry)?,
+                        i8_type.const_int(1 << 7, false),
+                        zero,
+                        "",
+                    )?
+                    .into_int_value();
+
+                self.accumulator = self.build_or(
+                    self.build_right_shift(
+                        self.accumulator,
+                        i8_type.const_int(1, false),
+                        false,
+                        "",
+                    )?,
+                    ext,
+                    "",
+                )?;
+
+                let carry = self.build_int_truncate(prev_acc, self.cx.bool_type(), "")?;
+                self.set_flag(Flag::Carry, carry)?;
+                self.set_nz(self.accumulator)?;
+            }
+            Instr::ROR(Operand::Addressing(addr)) => {
+                let (addr, _) = self.translate_address(addr)?;
+
+                let i8_type = self.cx.i8_type();
+                let zero = i8_type.const_zero();
+                let prev = self.build_read_u8(addr)?;
+
+                let ext = self
+                    .build_select(
+                        self.get_flag(Flag::Carry)?,
+                        i8_type.const_int(1 << 7, false),
+                        zero,
+                        "",
+                    )?
+                    .into_int_value();
+
+                let res = self.build_or(
+                    self.build_right_shift(prev, i8_type.const_int(1, false), false, "")?,
+                    ext,
+                    "",
+                )?;
+
+                let carry = self.build_int_truncate(prev, self.cx.bool_type(), "")?;
+                self.set_flag(Flag::Carry, carry)?;
+                self.set_nz(res)?;
+                self.build_write_u8(addr, res, cycles)?;
+            }
+            Instr::ASL(Operand::Immediate(_))
+            | Instr::LSR(Operand::Immediate(_))
+            | Instr::ROL(Operand::Immediate(_))
+            | Instr::ROR(Operand::Immediate(_)) => unreachable!(),
             Instr::JMP(addr) => {
                 return self.build_jump(self.cx.i16_type().const_int(addr as u64, false), cycles);
             }
