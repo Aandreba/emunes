@@ -1,3 +1,8 @@
+## Emunes - A toy NES emulator to learn about dynamic recompilation
+
+> **Warning**
+> This project was never intended to become an emulator you'd ever consider to use. Rather, I just used it to learn about dynamic recompilation.
+
 ## Related Work
 
 - [yamos6502](https://github.com/kromych/yamos6502)

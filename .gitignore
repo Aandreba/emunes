@@ -2,3 +2,6 @@
 /logs
 *.nes
 *.log
+flamegraph.sv
+*.data
+*.data.old

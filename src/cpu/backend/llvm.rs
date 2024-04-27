@@ -8,6 +8,7 @@ use crate::cpu::{
 use bitvec::prelude::*;
 use ffi_closure::Closure;
 use inkwell::{
+    basic_block::BasicBlock,
     builder::BuilderError,
     context::Context,
     execution_engine::{ExecutionEngine, JitFunction},
@@ -27,6 +28,12 @@ use std::{
     ffi::c_void,
     mem::offset_of,
     ops::{Deref, Range},
+    sync::{Arc, Condvar, Mutex, PoisonError},
+    time::Instant,
+};
+use utils_atomics::{
+    channel::once::{channel, Receiver},
+    AtomicCell,
 };
 
 type Function = unsafe extern "C" fn(
@@ -44,6 +51,7 @@ type Function = unsafe extern "C" fn(
 
 type CodeRegionArray = BitArr!(for 0x10000);
 
+const MAX_CACHE_SIZE: usize = 1024;
 const SKELETON: &str = include_str!("../../../skeleton.ll");
 const FUNTION_NAME: &str = "main";
 const ACC_OFFSET: usize = offset_of!(crate::cpu::State, accumulator);
@@ -56,6 +64,7 @@ const NMI_INTERRUPT_OFFSET: usize = offset_of!(crate::cpu::State, nmi_interrupt)
 
 pub struct Llvm<'cx> {
     compiled: HashMap<u16, Compiled<'cx>>,
+    oldest_code: Option<u16>,
     code_regions: CodeRegionArray,
     cx: Context,
 }
@@ -66,6 +75,7 @@ impl<'cx> Llvm<'cx> {
             cx: Context::create(),
             code_regions: CodeRegionArray::ZERO,
             compiled: HashMap::new(),
+            oldest_code: None,
         };
     }
 }
@@ -81,21 +91,17 @@ impl<'cx> Backend for Llvm<'cx> {
         unsafe {
             let cpu = &*(cpu as *mut Cpu<M, Self> as *mut UnsafeCell<Cpu<M, Self>>);
             let tick = Closure::<dyn FnMut(u8)>::new(move |x| tick(&mut *cpu.get(), x));
+            let initial_pc = pc;
 
             let state = std::ptr::addr_of_mut!((*cpu.get()).state);
             let memory = std::ptr::addr_of_mut!((*cpu.get()).memory);
             let backend = &mut (&mut *cpu.get()).backend;
 
-            let mut prev_pc = None;
             let mut prev_cycles = 0;
             loop {
-                #[cfg(test)]
-                if prev_pc.is_some_and(|prev| prev == pc) {
-                    log::warn!("Infinite loop detected at 0x{pc:X}")
-                }
-
                 log::trace!("Next PC: 0x{pc:X}\n{:?}", &*state);
-                prev_pc = Some(pc);
+                let cache_size = backend.compiled.len();
+
                 let (next_pc, clear_code_cache) = match backend.compiled.entry(pc) {
                     Entry::Occupied(entry) => entry.into_mut(),
                     Entry::Vacant(entry) => {
@@ -107,7 +113,6 @@ impl<'cx> Backend for Llvm<'cx> {
                             .map_err(RunError::Backend)?
                             .into_int_value();
 
-                        let start_pc = builder.pc;
                         loop {
                             let prev_pc = builder.pc;
                             builder.build_tick(prev_cycles).map_err(RunError::Backend)?;
@@ -133,12 +138,15 @@ impl<'cx> Backend for Llvm<'cx> {
                                 break;
                             }
                         }
-                        let end_pc = builder.pc;
 
-                        backend.code_regions[start_pc as usize..end_pc as usize].fill(true);
+                        backend.code_regions[builder.start_pc as usize..builder.end_pc as usize]
+                            .fill(true);
                         // builder.fn_value.print_to_stderr();
                         // optimize_module(&builder.module);
-                        entry.insert(Compiled::new(builder.module, start_pc..end_pc))
+                        entry.insert(Compiled::new(
+                            builder.module,
+                            builder.start_pc..builder.end_pc,
+                        ))
                     }
                 }
                 .call(
@@ -150,6 +158,7 @@ impl<'cx> Backend for Llvm<'cx> {
                 )
                 .map_err(RunError::Memory)?;
 
+                // Remove modified code (if any) from cache
                 if !clear_code_cache.is_empty() {
                     log::warn!("Found self-modifying code, clearing modified code");
                     for addr in clear_code_cache {
@@ -169,6 +178,24 @@ impl<'cx> Backend for Llvm<'cx> {
                     }
                 }
 
+                // If cache is too big, remove oldest code
+                if cache_size >= MAX_CACHE_SIZE {
+                    if let Some(key) = backend.oldest_code.take() {
+                        log::debug!("Removing code cached @ 0x{:4X}", key);
+                        let _ = backend.compiled.remove(&key);
+                    }
+                }
+
+                // Update oldest code (if necessary)
+                if !backend.oldest_code.is_some_and(|x| x != initial_pc) {
+                    // Find new oldest code
+                    backend.oldest_code = backend
+                        .compiled
+                        .iter()
+                        .min_by(|(_, x), (_, y)| x.last_exec.cmp(&y.last_exec))
+                        .map(|(&k, _)| k)
+                }
+
                 pc = next_pc
             }
         }
@@ -176,9 +203,14 @@ impl<'cx> Backend for Llvm<'cx> {
 }
 
 struct Builder<'cx> {
+    entry_pc: u16,
     start_pc: u16,
-    pc: u16,
+    end_pc: u16,
+    entry_block: BasicBlock<'cx>,
     prev_state: State<'cx>,
+
+    inline_count: u32,
+    pc: u16,
 
     state_ptr: PointerValue<'cx>,
     accumulator_ptr: PointerValue<'cx>,
@@ -306,7 +338,11 @@ impl<'a> Builder<'a> {
         );
         let fn_value = module.add_function(FUNTION_NAME, fn_type, None);
 
-        let entry_block = cx.append_basic_block(fn_value, "entry");
+        let entry_block = cx.append_basic_block(fn_value, "");
+        builder.position_at_end(entry_block);
+        let new_entry_block = cx.append_basic_block(fn_value, "entry");
+        builder.build_unconditional_branch(new_entry_block)?;
+        let entry_block = new_entry_block;
         builder.position_at_end(entry_block);
 
         let state_ptr = fn_value.get_first_param().unwrap().into_pointer_value();
@@ -370,7 +406,11 @@ impl<'a> Builder<'a> {
             )?;
 
             let mut this = Self {
+                inline_count: 32,
+                entry_block,
+                entry_pc: pc,
                 start_pc: pc,
+                end_pc: pc,
                 pc,
                 #[cfg(target_endian = "big")]
                 bswap: Intrinsic::find("llvm.bswap")
@@ -859,13 +899,16 @@ impl<'a> Builder<'a> {
             | Instr::ROL(Operand::Immediate(_))
             | Instr::ROR(Operand::Immediate(_)) => unreachable!(),
             Instr::JMP(addr) => {
-                return self.build_jump(self.cx.i16_type().const_int(addr as u64, false), cycles);
+                return self.build_jump(
+                    self.cx.i16_type().const_int(addr as u64, false),
+                    cycles,
+                    true,
+                );
             }
             Instr::JMPIndirect(addr) => {
                 let next_pc =
                     self.build_read_u16(self.cx.i16_type().const_int(addr as u64, false))?;
-                self.build_jump(next_pc, cycles)?;
-                return Ok(true);
+                return self.build_jump(next_pc, cycles, false);
             }
             Instr::JSR(addr) => {
                 self.stack_push_u16(
@@ -873,16 +916,19 @@ impl<'a> Builder<'a> {
                         .i16_type()
                         .const_int(self.pc.wrapping_sub(1) as u64, false),
                 )?;
-                self.build_jump(self.cx.i16_type().const_int(addr as u64, false), cycles)?;
-                return Ok(true);
+                return self.build_jump(
+                    self.cx.i16_type().const_int(addr as u64, false),
+                    cycles,
+                    true,
+                );
             }
             Instr::RTS => {
                 let next_pc = self.stack_pop_u16()?;
-                self.build_jump(
+                return self.build_jump(
                     self.build_int_add(next_pc, self.cx.i16_type().const_int(1, false), "")?,
                     cycles,
-                )?;
-                return Ok(true);
+                    true,
+                );
             }
             Instr::BCC(addr) => self.build_conditional_jump(Flag::Carry, true, addr)?,
             Instr::BCS(addr) => self.build_conditional_jump(Flag::Carry, false, addr)?,
@@ -908,8 +954,7 @@ impl<'a> Builder<'a> {
                 self.insert_flag(Flag::InterruptDisable)?;
 
                 let brk_addr = self.build_read_u16(i16_type.const_int(0xfffe, false))?;
-                self.build_jump(brk_addr, cycles)?;
-                return Ok(true);
+                return self.build_jump(brk_addr, cycles, true);
             }
             Instr::NOP => {}
             Instr::RTI => {
@@ -917,8 +962,7 @@ impl<'a> Builder<'a> {
                 self.flags_from_u8(next_flags)?;
 
                 let next_pc = self.stack_pop_u16()?;
-                self.build_jump(next_pc, cycles)?;
-                return Ok(true);
+                return self.build_jump(next_pc, cycles, true);
             }
         };
         return Ok(false);
@@ -1119,7 +1163,35 @@ impl<'a> Builder<'a> {
         return Ok(());
     }
 
-    fn build_jump(&mut self, addr: IntValue<'a>, cycles: u8) -> Result<bool, BuilderError> {
+    fn build_jump(
+        &mut self,
+        addr: IntValue<'a>,
+        cycles: u8,
+        inline_jump: bool,
+    ) -> Result<bool, BuilderError> {
+        if let Some(addr) = addr.get_zero_extended_constant() {
+            let addr = addr as u16;
+
+            if addr == self.entry_pc {
+                self.flush()?;
+                self.build_store(
+                    self.prev_cycles,
+                    self.cx.i8_type().const_int(cycles as u64, false),
+                )?;
+                self.build_unconditional_branch(self.entry_block)?;
+                return Ok(true);
+            } else if inline_jump && false {
+                if let Some(next_count) = self.inline_count.checked_sub(1) {
+                    self.inline_count = next_count;
+                    self.build_tick(self.cx.i8_type().const_int(cycles as u64, false))?;
+                    self.pc = addr;
+                    self.start_pc = self.start_pc.min(self.pc);
+                    self.end_pc = self.end_pc.max(self.pc);
+                    return Ok(false);
+                }
+            }
+        }
+
         self.flush()?;
         self.build_store(
             self.prev_cycles,
@@ -1310,7 +1382,7 @@ impl<'a> Builder<'a> {
         self.stack_push(flags, 0)?;
         self.insert_flag(Flag::InterruptDisable)?;
         let next_pc = self.build_read_u16(i16_type.const_int(0xfffa, false))?;
-        self.build_jump(next_pc, 2)?;
+        self.build_jump(next_pc, 2, false)?;
 
         self.position_at_end(continue_block);
         // Restore state
@@ -1345,7 +1417,11 @@ impl<'a> Builder<'a> {
         // we must preserve the same prev state for both branches
         let prev_state = self.prev_state.clone();
         // return next pc, perhaps the error is just a code cache invalidation
-        self.build_jump(self.cx.i16_type().const_int(self.pc as u64, false), cycles)?;
+        self.build_jump(
+            self.cx.i16_type().const_int(self.pc as u64, false),
+            cycles,
+            false,
+        )?;
 
         self.builder.position_at_end(continue_block);
         self.prev_state = prev_state;
@@ -1580,19 +1656,33 @@ unsafe extern "C" fn write_u16<M: Memory>(
 }
 
 struct Compiled<'cx> {
-    f: JitFunction<'cx, Function>,
+    f: Result<Function, (FunctionValue<'cx>, Arc<AtomicCell<Function>>)>,
     range: Range<u16>,
+    last_exec: Instant,
     _exec: ExecutionEngine<'cx>,
 }
 
 impl<'cx> Compiled<'cx> {
-    pub fn new(module: Module<'cx>, range: Range<u16>) -> Self {
+    pub fn new(module: Module<'cx>, range: Range<u16>, sem: Arc<Semaphore>) -> Self {
+        #[repr(transparent)]
+        struct AssertSend<T: ?Sized>(pub T);
+        unsafe impl<T: ?Sized> Send for AssertSend<T> {}
+
+        let res = Arc::new(AtomicCell::new(None));
         let exec = module
-            .create_jit_execution_engine(OptimizationLevel::Default)
+            .create_jit_execution_engine(OptimizationLevel::None)
             .unwrap();
 
+        let res2 = res.clone();
+        std::thread::spawn(move || unsafe {
+            let _guard = sem.acquire();
+            let f = exec.get_function(FUNTION_NAME).unwrap();
+            let _ = res2.replace(Some(f.into_raw()));
+        });
+
         return Self {
-            f: unsafe { exec.get_function(FUNTION_NAME).unwrap() },
+            f: Err((module.get_function(FUNTION_NAME).unwrap(), res)),
+            last_exec: Instant::now(),
             range,
             _exec: exec,
         };
@@ -1607,42 +1697,48 @@ impl<'cx> Compiled<'cx> {
         code_regions: &CodeRegionArray,
         prev_cycles: &mut u8,
     ) -> Result<(u16, Vec<u16>), M::Error> {
+        self.last_exec = Instant::now();
+
         let info = MemoryInfo::<M> {
             code_regions,
             latest_error: Cell::new(None::<M::Error>),
             clear_code_cache: Cell::new(Vec::new()),
         };
 
-        let next_pc = self.f.call(
-            state,
-            tick.user_data(),
-            tick.fn_ptr(),
-            memory as *mut M as *mut c_void,
-            std::ptr::addr_of!(info).cast(),
-            read_u8::<M>,
-            read_u16::<M>,
-            write_u8::<M>,
-            write_u16::<M>,
-            prev_cycles,
-        );
+        let next_pc = match self.get_compiled() {
+            Ok(f) => f(
+                state,
+                tick.user_data(),
+                tick.fn_ptr(),
+                memory as *mut M as *mut c_void,
+                std::ptr::addr_of!(info).cast(),
+                read_u8::<M>,
+                read_u16::<M>,
+                write_u8::<M>,
+                write_u16::<M>,
+                prev_cycles,
+            ),
+            Err(e) => todo!(),
+        };
 
         return match info.latest_error.take() {
             Some(err) => Err(err),
             None => Ok((next_pc, info.clear_code_cache.take())),
         };
     }
-}
 
-fn optimize_module(module: &Module) -> bool {
-    let builder = PassManagerBuilder::create();
-    builder.set_optimization_level(OptimizationLevel::Default);
-
-    let manager = PassManager::create(());
-    #[cfg(debug_assertions)]
-    manager.add_verifier_pass();
-    builder.populate_module_pass_manager(&manager);
-
-    return manager.run_on(module);
+    fn get_compiled(&mut self) -> Result<Function, FunctionValue<'cx>> {
+        match self.f.as_mut() {
+            Ok(f) => Ok(*f),
+            Err(recv) => match recv.take() {
+                Some(f) => unsafe {
+                    self.f = Ok(f);
+                    Ok(*self.f.as_ref().unwrap_unchecked())
+                },
+                None => todo!(),
+            },
+        }
+    }
 }
 
 struct MemoryInfo<'a, M: Memory> {
@@ -1667,5 +1763,50 @@ impl<'a, M: Memory> MemoryInfo<'a, M> {
         } else {
             return 0;
         }
+    }
+}
+
+struct Semaphore {
+    permits: Mutex<usize>,
+    condvar: Condvar,
+}
+
+impl Semaphore {
+    pub const fn new(permits: usize) -> Self {
+        return Self {
+            permits: Mutex::new(permits),
+            condvar: Condvar::new(),
+        };
+    }
+
+    pub fn acquire(&self) -> SemaphoreGuard<'_> {
+        let mut permits = self.permits.lock().unwrap_or_else(PoisonError::into_inner);
+
+        loop {
+            if let Some(new_permits) = permits.checked_sub(1) {
+                *permits = new_permits;
+                return SemaphoreGuard { parent: self };
+            }
+
+            permits = self
+                .condvar
+                .wait(permits)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+}
+
+pub struct SemaphoreGuard<'a> {
+    parent: &'a Semaphore,
+}
+
+impl<'a> Drop for SemaphoreGuard<'a> {
+    fn drop(&mut self) {
+        *self
+            .parent
+            .permits
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) += 1;
+        self.parent.condvar.notify_one();
     }
 }

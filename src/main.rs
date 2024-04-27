@@ -1,10 +1,6 @@
 use color_eyre::eyre::Report;
 use emunes::{
-    cartridge::Cartridge,
-    cpu::backend::{interpreter::Interpreter, llvm::Llvm},
-    joystick::Joystick,
-    memory::NesMemory,
-    Nes,
+    cartridge::Cartridge, cpu::backend::llvm::Llvm, joystick::Joystick, memory::NesMemory, Nes,
 };
 use std::{
     future::Future,
